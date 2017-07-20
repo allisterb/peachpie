@@ -160,13 +160,14 @@ namespace Pchp.CodeAnalysis.Errors
 
         public override string GetHelpLink(int code)
         {
-            throw new NotImplementedException();
+            return string.Empty;
+            //throw new NotImplementedException();
         }
 
         public override LocalizableString GetMessageFormat(int code)
         {
-            //return new LocalizableResourceString(code.ToString(), ErrorStrings.ResourceManager, typeof(ErrorFacts));
-            throw new NotImplementedException();
+            return new LocalizableResourceString(code.ToString(), ErrorStrings.ResourceManager, typeof(ErrorFacts));
+            //throw new NotImplementedException();
         }
 
         public override string GetMessagePrefix(string id, DiagnosticSeverity severity, bool isWarningAsError, CultureInfo culture)
