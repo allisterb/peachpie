@@ -650,6 +650,23 @@ namespace Pchp.Core
         /// <summary>
         /// Subtract operator.
         /// </summary>
+        public static double Sub(double dx, PhpValue y)
+        {
+            PhpNumber y_number;
+
+            var y_info = y.ToNumber(out y_number);
+            if ((y_info & (Convert.NumberInfo.Unconvertible | Convert.NumberInfo.IsPhpArray)) != 0)
+            {
+                throw new ArgumentException();  // return 0
+            }
+
+            //
+            return dx - y_number.ToDouble();
+        }
+
+        /// <summary>
+        /// Subtract operator.
+        /// </summary>
         public static PhpNumber Sub(PhpValue x, PhpNumber y)
         {
             PhpNumber x_number;
@@ -1352,6 +1369,8 @@ namespace Pchp.Core
         {
             return new stdClass(PhpValue.Create(this));
         }
+
+        public PhpArray ToArray() => PhpArray.New(PhpValue.Create(this));
 
         #endregion
     }

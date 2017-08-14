@@ -33,6 +33,7 @@ namespace Pchp.Core.Dynamic
 
             public static MethodInfo ToString_Double_Context = typeof(Core.Convert).GetMethod("ToString", typeof(double), typeof(Context));
             public static MethodInfo ToPhpString_PhpValue_Context = typeof(Core.Convert).GetMethod("ToPhpString", typeof(PhpValue), typeof(Context));
+            public static MethodInfo ToPhpNumber_String = typeof(Core.Convert).GetMethod("ToNumber", Types.String[0]);
 
             public static MethodInfo PhpAlias_EnsureObject = typeof(Core.PhpAlias).GetMethod("EnsureObject", Types.Empty);
             public static MethodInfo PhpAlias_EnsureArray = typeof(Core.PhpAlias).GetMethod("EnsureArray", Types.Empty);
@@ -42,7 +43,7 @@ namespace Pchp.Core.Dynamic
             public static MethodInfo PhpValue_EnsureAlias = typeof(PhpValue).GetMethod("EnsureAlias", Types.Empty);
             public static MethodInfo PhpValue_ToClass = typeof(PhpValue).GetMethod("ToClass", Types.Empty);
             public static MethodInfo PhpValue_ToArray = typeof(PhpValue).GetMethod("ToArray", Types.Empty);
-            public static MethodInfo PhpValue_AsCallable = typeof(PhpValue).GetMethod("AsCallable", Types.Empty);
+            public static MethodInfo PhpValue_AsCallable_RuntimeTypeHandle = typeof(PhpValue).GetMethod("AsCallable", typeof(RuntimeTypeHandle));
             public static MethodInfo PhpValue_AsObject = typeof(PhpValue).GetMethod("AsObject", Types.Empty);
             public static MethodInfo PhpValue_ToString_Context = typeof(PhpValue).GetMethod("ToString", typeof(Context));
             public static MethodInfo PhpValue_ToIntStringKey = typeof(PhpValue).GetMethod("ToIntStringKey");
@@ -68,6 +69,7 @@ namespace Pchp.Core.Dynamic
             public static readonly FieldInfo PhpValue_Void = Types.PhpValue[0].GetTypeInfo().GetDeclaredField("Void");
             public static readonly FieldInfo PhpValue_Null = Types.PhpValue[0].GetTypeInfo().GetDeclaredField("Null");
             public static readonly PropertyInfo PhpValue_False = Types.PhpValue[0].GetTypeInfo().GetDeclaredProperty("False");
+            public static readonly PropertyInfo PhpValue_True = Types.PhpValue[0].GetTypeInfo().GetDeclaredProperty("True");
             public static readonly FieldInfo PhpNumber_Default = Types.PhpNumber[0].GetTypeInfo().GetDeclaredField("Default");
         }
 

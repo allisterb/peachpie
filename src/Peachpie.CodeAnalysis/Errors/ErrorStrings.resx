@@ -126,11 +126,17 @@
   <data name="ERR_MetadataFileNotFound" xml:space="preserve">
     <value>Metadata file '{0}' could not be found</value>
   </data>
+  <data name="ERR_MethodCalledOnNonObject" xml:space="preserve">
+    <value>Call to a member function {0}() on {1}</value>
+  </data>
   <data name="ERR_NotYetImplemented" xml:space="preserve">
     <value>{0} is currently not supported by Peachpie.</value>
   </data>
   <data name="ERR_PositionalArgAfterUnpacking" xml:space="preserve">
     <value>Cannot use positional argument after argument unpacking</value>
+  </data>
+  <data name="ERR_StartupObjectNotFound" xml:space="preserve">
+    <value>Startup object matching '{0}' could not be resolved</value>
   </data>
   <data name="ERR_TypeNameCannotBeResolved" xml:space="preserve">
     <value>Type name '{0}' could not be resolved.</value>
@@ -138,11 +144,17 @@
   <data name="ERR_UnknownTypeDependencies" xml:space="preserve">
     <value>Type '{0}' cannot be declared.</value>
   </data>
+  <data name="ERR_ValueOfTypeCannotBeAliased" xml:space="preserve">
+    <value>Value of type '{0}' cannot be passed by reference</value>
+  </data>
   <data name="WRN_AmbiguousDeclaration" xml:space="preserve">
     <value>The declaration of '{0}' is ambiguous resulting in multiple versions to be compiled. Fix this issue by ensuring every base type is declared just once unconditionally.</value>
   </data>
   <data name="WRN_EvalDiscouraged" xml:space="preserve">
     <value>Use of 'eval()' is discouraged. Construct allows execution of arbitrary code and is subject to performance and memory overhead.</value>
+  </data>
+  <data name="WRN_NoSourceFiles" xml:space="preserve">
+    <value>No source files specified</value>
   </data>
   <data name="WRN_NotYetImplementedIgnored" xml:space="preserve">
     <value>{0} will be ignored, because it is currently not supported by Peachpie.</value>

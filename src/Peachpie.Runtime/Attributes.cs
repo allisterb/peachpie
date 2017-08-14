@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using System.Diagnostics;
 
 namespace Pchp.Core
 {
@@ -61,6 +62,32 @@ namespace Pchp.Core
     }
 
     /// <summary>
+    /// Assembly attribute specifying language option used to compile the assembly.
+    /// </summary>
+    [AttributeUsage(AttributeTargets.Assembly, AllowMultiple = true)]
+    public class TargetPhpLanguageAttribute : Attribute
+    {
+        /// <summary>
+        /// Whether short open tags were enabled to compile the sources.
+        /// </summary>
+        public bool ShortOpenTag { get; set; }
+
+        /// <summary>
+        /// The language version of compiled sources.
+        /// </summary>
+        public string LanguageVersion { get; set; }
+
+        /// <summary>
+        /// Construct the attribute.
+        /// </summary>
+        public TargetPhpLanguageAttribute(string langVersion, bool shortOpenTag)
+        {
+            this.ShortOpenTag = shortOpenTag;
+            this.LanguageVersion = langVersion;
+        }
+    }
+
+    /// <summary>
     /// Marks public declarations that won't be visible to the compiled PHP script.
     /// </summary>
     [AttributeUsage(AttributeTargets.Class | AttributeTargets.Enum | AttributeTargets.Method)]
@@ -81,6 +108,11 @@ namespace Pchp.Core
         readonly string _typename;
 
         /// <summary>
+        /// Optional. Relative path to the file where the type is defined.
+        /// </summary>
+        public string FileName { get; }
+
+        /// <summary>
         /// <see cref="ExplicitTypeName"/> value stating that the type name is inherited from the CLR name excluding its namespace part.
         /// It causes CLR type <c>A.B.C.X</c> to appear in PHP as <c>X</c>.
         /// </summary>
@@ -91,9 +123,11 @@ namespace Pchp.Core
         /// </summary>
         /// <param name="phpTypeName">Optional parameter overriding the default CLR name.
         /// Special value of <c>[name]</c> denotates, the name of the PHP type will be the same as in CLR without leading namespace.</param>
-        public PhpTypeAttribute(string phpTypeName = null)
+        /// <param name="fileName">Optional relative path to the file where the type is defined.</param>
+        public PhpTypeAttribute(string phpTypeName = null, string fileName = null)
         {
             _typename = phpTypeName;
+            FileName = fileName;
         }
     }
 

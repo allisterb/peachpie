@@ -40,6 +40,9 @@ namespace Pchp.CodeAnalysis.CodeGen
         /// </summary>
         public IPlace ContextPlaceOpt => _contextPlace;
 
+        /// <summary>
+        /// Emits <c>RuntimeTypeHandle</c> of current class context.
+        /// </summary>
         public void EmitCallerRuntimeTypeHandle()
         {
             var caller = this.CallerType;
@@ -47,6 +50,11 @@ namespace Pchp.CodeAnalysis.CodeGen
             {
                 // RuntimeTypeHandle
                 EmitLoadToken(caller, null);
+            }
+            else if (this.Routine is SourceGlobalMethodSymbol global)
+            {
+                global.SelfParameter.EmitLoad(_il)
+                    .Expect(CoreTypes.RuntimeTypeHandle);
             }
             else
             {
@@ -60,6 +68,14 @@ namespace Pchp.CodeAnalysis.CodeGen
         /// Always valid in context of global scope.
         /// </summary>
         public IPlace LocalsPlaceOpt => _localsPlaceOpt;
+
+        /// <summary>
+        /// Gets place referring to compiler generated temporal variables.
+        /// </summary>
+        /// <remarks>
+        /// Must not be null for methods that contain any synthesized variables.
+        /// </remarks>
+        public IPlace TemporalLocalsPlace => _tmpLocalsPlace;
 
         /// <summary>
         /// Gets value indicating the routine uses unoptimized locals access.
@@ -94,6 +110,13 @@ namespace Pchp.CodeAnalysis.CodeGen
             {
                 return (NamedTypeSymbol)_thisPlace.EmitLoad(_il);
             }
+        }
+
+        public TypeSymbol EmitGeneratorInstance()
+        {
+            Contract.ThrowIfNull(this.GeneratorStateMachineMethod);
+            // .ldarg <generator>
+            return new ParamPlace(this.GeneratorStateMachineMethod.GeneratorParameter).EmitLoad(_il);
         }
 
         /// <summary>
@@ -635,15 +658,21 @@ namespace Pchp.CodeAnalysis.CodeGen
 
             TypeSymbol arrtype;
 
-            var ps = routine.Parameters;
-            var last = ps.LastOrDefault();
-            var variadic = (last != null && last.IsParams && last.Type.IsSZArray()) ? last : null;  // optional params
+            var ps = routine.SourceParameters;
+            var variadic = routine.GetParamsParameter();  // optional params
             var variadic_element = (variadic?.Type as ArrayTypeSymbol)?.ElementType;
             var variadic_place = variadic != null ? new ParamPlace(variadic) : null;
 
-            ps = ps.Where(p => !p.IsImplicitlyDeclared && !p.IsParams).ToImmutableArray();  // parameters without implicitly declared parameters
+            var useparams = (routine is SourceLambdaSymbol) ? ((SourceLambdaSymbol)routine).UseParams.Count : 0;    // lambda function 'use' parameters
 
-            if (ps.Length == 0 && variadic_element == elementType)
+            ps = ps.Skip(useparams).Where(p => !p.IsParams).ToArray();  // parameters without implicitly declared parameters
+
+            if (ps.Length == 0 && variadic == null)
+            {
+                // empty array
+                return Emit_EmptyArray(elementType);
+            }
+            else if (ps.Length == 0 && variadic_element == elementType)
             {
                 // == params
                 arrtype = variadic_place.EmitLoad(_il);
@@ -992,20 +1021,6 @@ namespace Pchp.CodeAnalysis.CodeGen
             ReturnTemporaryLocal(tmpi);
         }
 
-        public void EmitUnset(BoundReferenceExpression expr)
-        {
-            Debug.Assert(expr != null);
-
-            if (!expr.Access.IsUnset)
-                throw new ArgumentException();
-
-            var place = expr.BindPlace(this);
-            Debug.Assert(place != null);
-
-            place.EmitStorePrepare(this);
-            place.EmitStore(this, null);
-        }
-
         /// <summary>
         /// Emits <c>Array.Length</c> call expecting an array instance on top of the stack, returning <c>int</c>.
         /// </summary>
@@ -1052,7 +1067,10 @@ namespace Pchp.CodeAnalysis.CodeGen
                 {
                     // POP <thisExpr>
                     EmitPop(Emit(thisExpr));
-                    return null;
+
+                    // We need to remember the type for late static binding, e.g.: $instance->staticMethodUsingLSB()
+                    // TODO: Resolve from $instance dynamically (it may be its subclass)
+                    return (method as SourceRoutineSymbol)?.RequiresLateStaticBoundParam == true ? containingType : null;
                 }
             }
             else
@@ -1355,81 +1373,59 @@ namespace Pchp.CodeAnalysis.CodeGen
         }
 
         /// <summary>
-        /// Emits .call to <paramref name="target"/> assuming it takes the same arguments as passed to the caller method (<paramref name="thismethod"/>).
+        /// Emits .call to <paramref name="target"/> with the same arguments the caller method parameters (<paramref name="thismethod"/>) including reference to <c>this</c>.
         /// </summary>
         /// <param name="target">Method to be called.</param>
         /// <param name="thismethod">Current method.</param>
         /// <returns>Return of <paramref name="target"/>.</returns>
-        internal TypeSymbol EmitThisCall(MethodSymbol target, MethodSymbol thismethod)
+        internal TypeSymbol EmitForwardCall(MethodSymbol target, MethodSymbol thismethod)
         {
             if (target == null)
             {
                 return CoreTypes.Void;
             }
+            // bind "this" expression if needed
+            BoundExpression thisExpr;
 
             if (target.HasThis)
             {
-                Debug.Assert(thismethod.HasThis);
-                Debug.Assert(this.ThisPlaceOpt != null);
-                Debug.Assert(this.ThisPlaceOpt.TypeOpt.IsEqualToOrDerivedFrom(target.ContainingType));
-                this.EmitThis();
+                thisExpr = new BoundVariableRef(new BoundVariableName(VariableName.ThisVariableName))
+                {
+                    Variable = BoundLocal.CreateFromPlace(this.ThisPlaceOpt),
+                    Access = BoundAccess.Read
+                };
+            }
+            else
+            {
+                thisExpr = null;
             }
 
-            var targetps = target.Parameters;
+            // bind arguments
             var givenps = thismethod.Parameters;
-            var writebacks = new List<WriteBackInfo>();
-
-            int srcp = 0;
-            while (srcp < givenps.Length && givenps[srcp].IsImplicitlyDeclared && !givenps[srcp].IsParams)
+            var arguments = new List<BoundArgument>(givenps.Length);
+            for (int i = 0; i < givenps.Length; i++)
             {
-                srcp++;
+                var p = givenps[i];
+                if (p.IsImplicitlyDeclared && !p.IsParams) continue;
+
+                var expr = new BoundVariableRef(new BoundVariableName(new VariableName(p.MetadataName)))
+                {
+                    Variable = new BoundParameter(p, null),
+                    Access = BoundAccess.Read
+                };
+
+                var arg = p.IsParams
+                    ? BoundArgument.CreateUnpacking(expr)
+                    : BoundArgument.Create(expr);
+
+                arguments.Add(arg);
             }
 
-            for (int i = 0; i < targetps.Length; i++)
-            {
-                var targetp = targetps[i];
-                if (targetp.IsImplicitlyDeclared && !targetp.IsParams)
-                {
-                    if (SpecialParameterSymbol.IsContextParameter(targetp))
-                    {
-                        this.EmitLoadContext();
-                    }
-                    else
-                    {
-                        throw new NotImplementedException();
-                    }
-                }
-                else
-                {
-                    if (srcp < givenps.Length)
-                    {
-                        var p = givenps[srcp];
-                        EmitLoadArgument(
-                            targetp,
-                            new BoundVariableRef(new BoundVariableName(new VariableName(p.MetadataName)))
-                            {
-                                Variable = new BoundParameter(p, null),
-                                Access = BoundAccess.Read
-                            },
-                            writebacks);
-                    }
-                    else
-                    {
-                        EmitParameterDefaultValue(targetp);
-                    }
 
-                    srcp++;
-                }
-            }
-
-            //
-            var result = this.EmitCall(ILOpCode.Call, target);
-
-            //
-            WriteBackInfo.WriteBackAndFree(this, writebacks);
-
-            //
-            return result;
+            // emit call of target
+            return arguments.Any(arg => arg.IsUnpacking)
+                ? EmitCall_UnpackingArgs(ILOpCode.Call, target, thisExpr, arguments.AsImmutableOrEmpty(), null)
+                : EmitCall(ILOpCode.Call, target, thisExpr, arguments.AsImmutableOrEmpty(), null);
         }
 
         /// <summary>
@@ -1451,7 +1447,19 @@ namespace Pchp.CodeAnalysis.CodeGen
             else if (access.IsReadCopy)
             {
                 // copy the value
-                stack = EmitDeepCopy(stack);
+                if (stack == CoreTypes.PhpAlias)
+                {
+                    // dereference & deep copy
+                    // Template: <PhpAlias>.Value.DeepCopy()
+                    Emit_PhpAlias_GetValueAddr();
+                    stack = EmitCall(ILOpCode.Call, CoreMethods.PhpValue.DeepCopy);
+                }
+                else
+                {
+                    // deep copy
+                    // note: functions return refs only if their return type is PhpAlias, see above
+                    stack = EmitDeepCopy(stack);
+                }
             }
 
             //
@@ -1526,6 +1534,24 @@ namespace Pchp.CodeAnalysis.CodeGen
 
             //
             return CoreTypes.PhpValue;
+        }
+
+        /// <summary>
+        /// Emits <c>??</c> operation against the value on top of the evaluation stack.
+        /// </summary>
+        /// <param name="nullemitter">Routine that emits the FALSE branch of the operator.</param>
+        internal void EmitNullCoalescing(Action<CodeGenerator> nullemitter)
+        {
+            Debug.Assert(nullemitter != null);
+
+            var lbl_notnull = new NamedLabel("NotNull");
+            _il.EmitOpCode(ILOpCode.Dup);
+            _il.EmitBranch(ILOpCode.Brtrue, lbl_notnull);
+
+            _il.EmitOpCode(ILOpCode.Pop);
+            nullemitter(this);
+
+            _il.MarkLabel(lbl_notnull);
         }
 
         /// <summary>
@@ -1877,6 +1903,36 @@ namespace Pchp.CodeAnalysis.CodeGen
             EmitSymbolToken(type, null);
         }
 
+        /// <summary>
+        /// Emits <c>PhpString.Append</c> expecting <c>PhpString</c> and <paramref name="ytype"/> on top of evaluation stack.
+        /// </summary>
+        /// <param name="ytype">Type of argument loaded on stack.</param>
+        internal void Emit_PhpString_Append(TypeSymbol ytype)
+        {
+            if (ytype == CoreTypes.PhpAlias)
+            {
+                ytype = Emit_PhpAlias_GetValue();
+            }
+
+            if (ytype == CoreTypes.PhpString)
+            {
+                // Append(PhpString)
+                EmitCall(ILOpCode.Callvirt, CoreMethods.PhpString.Append_PhpString);
+            }
+            else if (ytype == CoreTypes.PhpValue)
+            {
+                // Append(PhpValue, Context)
+                EmitLoadContext();
+                EmitCall(ILOpCode.Callvirt, CoreMethods.PhpString.Append_PhpValue_Context);
+            }
+            else
+            {
+                // Append(string)
+                EmitConvertToString(ytype, 0);
+                EmitCall(ILOpCode.Callvirt, CoreMethods.PhpString.Append_String);
+            }
+        }
+
         public void EmitEcho(BoundExpression expr)
         {
             Contract.ThrowIfNull(expr);
@@ -1907,9 +1963,7 @@ namespace Pchp.CodeAnalysis.CodeGen
                     method = CoreMethods.Operators.Echo_Long.Symbol;
                     break;
                 case SpecialType.System_Boolean:
-                    // TODO: if (VALUE) echo("1");
-                    EmitCall(ILOpCode.Call, CoreMethods.Operators.ToString_Bool).Expect(SpecialType.System_String);
-                    method = CoreMethods.Operators.Echo_String.Symbol;
+                    method = CoreMethods.Operators.Echo_Bool.Symbol;
                     break;
                 default:
                     if (type == CoreTypes.PhpString)
@@ -2270,12 +2324,13 @@ namespace Pchp.CodeAnalysis.CodeGen
                         Debug.Assert(LocalsPlaceOpt != null);
                         LocalsPlaceOpt.EmitLoad(_il);
                         break;
+                    case SpecialParameterSymbol.ThisName:
+                        EmitThisOrNull();
+                        break;
+                    case SpecialParameterSymbol.SelfName:
+                        this.EmitCallerRuntimeTypeHandle();
+                        break;
                     default:
-                        if (p.Name == SpecialParameterSymbol.ThisName)
-                        {
-                            EmitThisOrNull();
-                            break;
-                        }
                         throw ExceptionUtilities.UnexpectedValue(p.Name);
                 }
             }
@@ -2345,7 +2400,22 @@ namespace Pchp.CodeAnalysis.CodeGen
                 }
                 else if (value is string)
                 {
-                    Builder.EmitStringConstant((string)value);
+                    var str = (string)value;
+                    if (targetOpt != null)
+                    {
+                        switch (targetOpt.SpecialType)
+                        {
+                            case SpecialType.System_Char:
+                                if (str != null && str.Length == 1)
+                                {
+                                    Builder.EmitCharConstant(str[0]);
+                                    return DeclaringCompilation.GetSpecialType(SpecialType.System_Char);
+                                }
+                                break;
+                        }
+                    }
+
+                    Builder.EmitStringConstant(str);
                     return CoreTypes.String;
                 }
                 else if (value is bool)
@@ -2391,6 +2461,21 @@ namespace Pchp.CodeAnalysis.CodeGen
                     Builder.EmitIntConstant(unchecked((int)(uint)value));
                     return DeclaringCompilation.GetSpecialType(SpecialType.System_UInt32);
                 }
+                else if (value is char)
+                {
+                    if (targetOpt != null)
+                    {
+                        switch (targetOpt.SpecialType)
+                        {
+                            case SpecialType.System_String:
+                                Builder.EmitStringConstant(value.ToString());
+                                return CoreTypes.String;
+                        }
+                    }
+
+                    Builder.EmitCharConstant((char)value);
+                    return DeclaringCompilation.GetSpecialType(SpecialType.System_Char);
+                }
                 else
                 {
                     throw ExceptionUtilities.UnexpectedValue(value);
@@ -2420,6 +2505,9 @@ namespace Pchp.CodeAnalysis.CodeGen
                     break;
                 case SpecialType.System_String:
                     _il.EmitStringConstant(string.Empty);
+                    break;
+                case SpecialType.System_Char:
+                    _il.EmitCharConstant('\0');
                     break;
                 default:
                     if (type == CoreTypes.PhpAlias)
@@ -2511,16 +2599,7 @@ namespace Pchp.CodeAnalysis.CodeGen
             else
             {
                 // default(T)
-
-                var loc = this.GetTemporaryLocal(valuetype, true);
-
-                // ldloca <loc>
-                // .initobj <type>
-                Builder.EmitLocalAddress(loc);
-                Builder.EmitOpCode(ILOpCode.Initobj);
-                EmitSymbolToken(valuetype, null);
-                // ldloc <loc>
-                Builder.EmitLocalLoad(loc);
+                _il.EmitValueDefault(this.Module, this.Diagnostics, this.GetTemporaryLocal(valuetype, true));
             }
         }
 
@@ -2722,6 +2801,16 @@ namespace Pchp.CodeAnalysis.CodeGen
             il.EmitToken(symbol, syntaxNode, diagnostics);
         }
 
+        public static void EmitValueDefault(this ILBuilder il, PEModuleBuilder module, DiagnosticBag diagnostics, LocalDefinition tmp)
+        {
+            Debug.Assert(tmp.Type.IsValueType);
+            il.EmitLocalAddress(tmp);
+            il.EmitOpCode(ILOpCode.Initobj);
+            il.EmitSymbolToken(module, diagnostics, (TypeSymbol)tmp.Type, null);
+            // ldloc <loc>
+            il.EmitLocalLoad(tmp);
+        }
+
         /// <summary>
         /// Emits call to given method.
         /// </summary>
@@ -2740,6 +2829,17 @@ namespace Pchp.CodeAnalysis.CodeGen
             il.EmitOpCode(code, stack);
             il.EmitToken(module.Translate(method, diagnostics, false), null, diagnostics);
             return (code == ILOpCode.Newobj) ? method.ContainingType : method.ReturnType;
+        }
+
+        public static void EmitCharConstant(this ILBuilder il, char value)
+        {
+            il.EmitIntConstant(unchecked((int)value));
+        }
+
+        public static TypeSymbol EmitLoad(this ParameterSymbol p, ILBuilder il)
+        {
+            Debug.Assert(p != null, nameof(p));
+            return new ParamPlace(p).EmitLoad(il);
         }
     }
 }

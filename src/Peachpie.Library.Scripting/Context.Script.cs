@@ -169,8 +169,23 @@ namespace Peachpie.Library.Scripting
         /// <returns>New script reepresenting the compiled code.</returns>
         public static Script Create(Context.ScriptOptions options, string code, PhpCompilationFactory builder, IEnumerable<Script> previousSubmissions)
         {
+            // use the language version of the requesting context
+            Version languageVersion = null;
+            bool shortOpenTags = false;
+
+            var language = options.Context.TargetPhpLanguage;
+            if (language != null)
+            {
+                shortOpenTags = language.ShortOpenTag;
+                Version.TryParse(language.LanguageVersion, out languageVersion);
+            }
+
+            // parse the source code
             var tree = PhpSyntaxTree.ParseCode(code,
-                new PhpParseOptions(kind: options.IsSubmission ? SourceCodeKind.Script : SourceCodeKind.Regular),
+                new PhpParseOptions(
+                    kind: options.IsSubmission ? SourceCodeKind.Script : SourceCodeKind.Regular,
+                    languageVersion: languageVersion,
+                    shortOpenTags: shortOpenTags),
                 PhpParseOptions.Default,
                 options.Location.Path);
 
@@ -234,7 +249,7 @@ namespace Peachpie.Library.Scripting
         /// <returns></returns>
         private static Script CreateInvalid(IEnumerable<Diagnostic> diagnostics)
         {
-            return new Script((ctx, locals, @this) =>
+            return new Script((ctx, locals, @this, self) =>
             {
                 foreach (var d in diagnostics)
                 {
@@ -258,9 +273,9 @@ namespace Peachpie.Library.Scripting
 
         #region Context.IScript
 
-        public PhpValue Evaluate(Context ctx, PhpArray locals, object @this)
+        public PhpValue Evaluate(Context ctx, PhpArray locals, object @this, RuntimeTypeHandle self)
         {
-            return _entryPoint(ctx, locals, @this);
+            return _entryPoint(ctx, locals, @this, self);
         }
 
         /// <summary>

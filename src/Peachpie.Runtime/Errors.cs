@@ -190,7 +190,7 @@ namespace Pchp.Core
         /// <param name="functionName">The name of the function called.</param>
         public static void InvalidImplicitCast(string argument, string targetType, string functionName)
         {
-            Throw(PhpError.Warning, string.Format(ErrResources.invalid_implicit_cast, argument, targetType, functionName));
+            Throw(PhpError.Warning, ErrResources.invalid_implicit_cast, argument, targetType, functionName);
         }
 
         /// <summary>
@@ -266,6 +266,12 @@ namespace Pchp.Core
         {
             if (exceptionMessage == null) throw new ArgumentNullException("exceptionMessage");
             return exceptionMessage.TrimEnd(new char[] { '.' });
+        }
+
+        internal static void ThrowSelfOutOfClass()
+        {
+            Throw(PhpError.Error, ErrResources.self_used_out_of_class);
+            throw new ArgumentException(ErrResources.self_used_out_of_class);
         }
     }
 

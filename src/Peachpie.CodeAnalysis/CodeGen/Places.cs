@@ -897,6 +897,8 @@ namespace Pchp.CodeAnalysis.CodeGen
 
         public TypeSymbol EmitLoad(CodeGenerator cg)
         {
+            TypeSymbol result;
+
             if (_access.IsReadRef)
             {
                 // TODO: update Context
@@ -905,15 +907,24 @@ namespace Pchp.CodeAnalysis.CodeGen
                 cg.EmitLoadContext();
                 cg.EmitCall(ILOpCode.Call, cg.CoreMethods.Context.Globals.Getter);
                 cg.EmitIntStringKey(_name.Value);
-                return cg.EmitCall(ILOpCode.Call, cg.CoreMethods.PhpArray.EnsureItemAlias_IntStringKey);
+                result = cg.EmitCall(ILOpCode.Call, cg.CoreMethods.PhpArray.EnsureItemAlias_IntStringKey)
+                    .Expect(cg.CoreTypes.PhpAlias);
             }
             else
             {
                 Debug.Assert(_access.IsRead);
                 var p = ResolveSuperglobalProperty(cg);
                 cg.EmitLoadContext();
-                return cg.EmitCall(p.GetMethod.IsVirtual ? ILOpCode.Callvirt : ILOpCode.Call, p.GetMethod);
+                result = cg.EmitCall(p.GetMethod.IsVirtual ? ILOpCode.Callvirt : ILOpCode.Call, p.GetMethod);
+
+                //
+                if (_access.IsReadCopy)
+                {
+                    result = cg.EmitDeepCopy(result, false);
+                }
             }
+
+            return result;
         }
 
         public void EmitStore(CodeGenerator cg, TypeSymbol valueType)
@@ -1098,6 +1109,23 @@ namespace Pchp.CodeAnalysis.CodeGen
             cg.EmitLoadContext();
             return cg.EmitCall(ILOpCode.Call, cg.CoreMethods.Context.Globals.Getter);   // <ctx>.Globals
         }
+    }
+
+    internal class BoundIndirectTemporalVariablePlace : BoundIndirectVariablePlace
+    {
+        public BoundIndirectTemporalVariablePlace(BoundExpression nameExpr, BoundAccess access)
+            : base(nameExpr, access)
+        {
+        }
+
+        protected override TypeSymbol LoadVariablesArray(CodeGenerator cg)
+        {
+            Debug.Assert(cg.TemporalLocalsPlace != null, $"Method with temporal variables must have {nameof(cg.TemporalLocalsPlace)} set.");
+
+            return cg.TemporalLocalsPlace.EmitLoad(cg.Builder)
+                .Expect(cg.CoreTypes.PhpArray);
+        }
+
     }
 
     #endregion
@@ -1378,8 +1406,8 @@ namespace Pchp.CodeAnalysis.CodeGen
                 }
                 else
                 {
-                    Debug.Assert(false, "value cannot be aliased");
-
+                    cg.Diagnostics.Add(cg.Routine, _boundref.PhpSyntax, Errors.ErrorCode.ERR_ValueOfTypeCannotBeAliased, type.Name);
+                    
                     // new PhpAlias((PhpValue)<place>, 1)
                     EmitOpCode_Load(cg);
                     cg.EmitConvertToPhpValue(type, 0);
@@ -1758,6 +1786,8 @@ namespace Pchp.CodeAnalysis.CodeGen
 
         public BoundIndirectStFieldPlace(BoundTypeRef typeref, BoundVariableName fldname, BoundFieldRef boundref)
         {
+            Debug.Assert(boundref != null, nameof(boundref));
+
             _type = typeref;
             _name = fldname;
             _boundref = boundref;
@@ -1814,15 +1844,16 @@ namespace Pchp.CodeAnalysis.CodeGen
                 null,
                 return_type);
 
-
             cg.EmitCall(ILOpCode.Callvirt, functype.DelegateInvokeMethod);
 
             //
             _lazyLoadCallSite.Construct(functype, cctor =>
             {
-                // new GetFieldBinder(field_name, context, return, flags)   // TODO: class constants
+                Debug.Assert(cctor.Routine == cg.Routine);  // same caller context
+
+                // new [GetFieldBinder|GetClassConstBinder](field_name, context, return, flags)
                 cctor.Builder.EmitStringConstant(this.NameValueOpt);
-                cctor.EmitLoadToken(cg.Routine.ContainingType, null);
+                cctor.EmitCallerRuntimeTypeHandle();
                 cctor.EmitLoadToken(return_type, null);
                 cctor.Builder.EmitIntConstant((int)Access.Flags);
                 cctor.EmitCall(ILOpCode.Newobj, _boundref.IsClassConstant
@@ -1880,7 +1911,7 @@ namespace Pchp.CodeAnalysis.CodeGen
             _lazyStoreCallSite.Construct(functype, cctor =>
             {
                 cctor.Builder.EmitStringConstant(this.NameValueOpt);
-                cctor.EmitLoadToken(cg.Routine.ContainingType, null);
+                cctor.EmitCallerRuntimeTypeHandle();
                 cctor.Builder.EmitIntConstant((int)Access.Flags);   // flags
                 cctor.EmitCall(ILOpCode.Newobj, cg.CoreMethods.Dynamic.SetFieldBinder_ctor);
             });

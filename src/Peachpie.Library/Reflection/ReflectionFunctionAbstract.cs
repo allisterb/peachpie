@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using System.Reflection;
 
 namespace Pchp.Library.Reflection
 {
@@ -39,7 +40,8 @@ namespace Pchp.Library.Reflection
         //private void __clone(void ) { throw new NotImplementedException(); }
         public ReflectionClass getClosureScopeClass() { throw new NotImplementedException(); }
         public object getClosureThis() { throw new NotImplementedException(); }
-        public string getDocComment() { throw new NotImplementedException(); }
+        [return: CastToFalse]
+        public string getDocComment() => null;
         public long getEndLine() { throw new NotImplementedException(); }
         //public ReflectionExtension getExtension() { throw new NotImplementedException(); }
         public string getExtensionName() { throw new NotImplementedException(); }
@@ -54,7 +56,41 @@ namespace Pchp.Library.Reflection
         }
         public long getNumberOfParameters() { throw new NotImplementedException(); }
         public long getNumberOfRequiredParameters() { throw new NotImplementedException(); }
-        public PhpArray getParameters() { throw new NotImplementedException(); }
+
+        /// <summary>
+        /// Get the parameters as an array of <see cref="ReflectionParameter"/>.
+        /// </summary>
+        /// <returns>The parameters, as <see cref="ReflectionParameter"/> objects.</returns>
+        public PhpArray getParameters()
+        {
+            int minParamsCount;         // To track the least number of parameters among all the overloads
+            int skippedParamsCount;     // The number of initial implicit parameters, which are not retrieved
+            ParameterInfo[] parameters;
+            if (_routine.Methods.Length == 1)
+            {
+                // The most common and simplest case
+                parameters = _routine.Methods[0].GetParameters();
+                skippedParamsCount = Core.Reflection.ReflectionUtils.ImplicitParametersCount(parameters);
+                minParamsCount = parameters.Length - skippedParamsCount;
+            }
+            else
+            {
+                ReflectionUtils.ProcessParametersOfOverloads(_routine.Methods, out minParamsCount, out parameters, out skippedParamsCount);
+            }
+
+            var result = new PhpArray(parameters.Length - skippedParamsCount);
+            for (int i = skippedParamsCount; i < parameters.Length; i++)
+            {
+                // If the parameter is not present in an overload, it is effectively optional
+                var realPosition = i - skippedParamsCount;
+                bool forceOptional = realPosition >= minParamsCount;
+
+                result.Add(new ReflectionParameter(parameters[i], forceOptional));
+            }
+
+            return result;
+        }
+
         //public ReflectionType getReturnType() { throw new NotImplementedException(); }
         public string getShortName()
         {

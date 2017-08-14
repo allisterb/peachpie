@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
+using Pchp.Core.Utilities;
 
 namespace Pchp.Core.Reflection
 {
@@ -75,29 +76,56 @@ namespace Pchp.Core.Reflection
         {
             return EnumerateInstanceFields(instance,
                 (f, d) => new IntStringKey(f.Name),
-                (k) => k,
+                FuncExtensions.Identity<IntStringKey>(),
                 (f) => IsVisible(f, caller));
         }
 
         /// <summary>
-        /// Enumerates visible instance fields of given object, transforms field names according to <c>print_r</c> notation.
+        /// Enumerates instance fields of given object, transforms field names according to <c>print_r</c> notation.
         /// </summary>
         /// <param name="instance">Object which fields will be enumerated.</param>
         /// <returns>Enumeration of fields and their values, including runtime fields.</returns>
         public static IEnumerable<KeyValuePair<string, PhpValue>> EnumerateInstanceFieldsForPrint(object instance)
         {
             return EnumerateInstanceFields(instance,
-                (f, d) => FormatPropertyNameForPrint(f, d),
-                (k) => k.ToString(),
-                (f) => (f.Attributes & (FieldAttributes.Assembly)) != FieldAttributes.Assembly); // ignore "internal" fields
+                s_formatPropertyNameForPrint,
+                s_keyToString,
+                s_notInternalFieldsPredicate);
         }
 
-        static string FormatPropertyNameForPrint(FieldInfo f, PhpTypeInfo declarer)
+        static readonly Func<IntStringKey, string> s_keyToString = new Func<IntStringKey, string>(k => k.ToString());
+
+        static readonly Func<FieldInfo, bool> s_notInternalFieldsPredicate = new Func<FieldInfo, bool>(
+            f => (f.Attributes & (FieldAttributes.Assembly)) != FieldAttributes.Assembly // ignore "internal" fields
+        );
+
+        static readonly Func<FieldInfo, PhpTypeInfo, string> s_formatPropertyNameForPrint = new Func<FieldInfo, PhpTypeInfo, string>((f, declarer) =>
         {
             if (f.IsPublic) return f.Name;
-            if (f.IsPrivate) return $"{f.Name}:{declarer.Name}:private";
-            return $"{f.Name}:protected";
+            if (f.IsPrivate) return string.Concat(f.Name, ":", declarer.Name, ":private");
+            return f.Name + ":protected";
+        });
+
+        /// <summary>
+        /// Enumerates instance fields of given object, transforms field names according to <c>var_dump</c> notation.
+        /// </summary>
+        /// <param name="instance">Object which fields will be enumerated.</param>
+        /// <returns>Enumeration of fields and their values, including runtime fields.</returns>
+        public static IEnumerable<KeyValuePair<string, PhpValue>> EnumerateInstanceFieldsForDump(object instance)
+        {
+            return EnumerateInstanceFields(instance,
+                s_formatPropertyNameForDump,
+                s_keyToString,
+                s_notInternalFieldsPredicate);
         }
+
+        static readonly Func<FieldInfo, PhpTypeInfo, string> s_formatPropertyNameForDump = new Func<FieldInfo, PhpTypeInfo, string>((f, declarer) =>
+        {
+            var name = "\"" + f.Name + "\"";
+            if (f.IsPublic) return name;
+            if (f.IsPrivate) return string.Concat(name, ":\"", declarer.Name, "\":private");
+            return name + ":protected";
+        });
 
         /// <summary>
         /// Enumerates instance fields of given object.

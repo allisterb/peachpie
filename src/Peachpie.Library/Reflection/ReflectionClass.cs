@@ -5,6 +5,8 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Threading.Tasks;
+using System.IO;
+using Pchp.Core.Resources;
 
 namespace Pchp.Library.Reflection
 {
@@ -76,33 +78,7 @@ namespace Pchp.Library.Reflection
         {
             Debug.Assert(_tinfo == null, "Subsequent call not allowed.");
 
-            _tinfo = ResolvePhpTypeInfo(ctx, @class);
-
-            if (_tinfo == null)
-            {
-                throw new ArgumentException();  // TODO: ReflectionException
-            }
-        }
-
-        internal static PhpTypeInfo ResolvePhpTypeInfo(Context ctx, PhpValue @class)
-        {
-            object instance;
-
-            var classname = @class.ToStringOrNull();
-            if (classname != null)
-            {
-                return ctx.GetDeclaredType(classname, true);
-            }
-            else if ((instance = @class.AsObject()) != null)
-            {
-                return instance.GetPhpTypeInfo();
-            }
-            else
-            {
-                // argument type exception
-            }
-
-            return null;
+            _tinfo = ReflectionUtils.ResolvePhpTypeInfo(ctx, @class);
         }
 
         #endregion
@@ -127,13 +103,44 @@ namespace Pchp.Library.Reflection
             }
             return result;
         }
-        public ReflectionMethod getConstructor() { throw new NotImplementedException(); }
+
+        /// <summary>
+        /// Gets the constructor of the class.
+        /// </summary>
+        /// <returns>A <see cref="ReflectionMethod"/> object reflecting the class' constructor,
+        /// or NULL if the class has no constructor.</returns>
+        public ReflectionMethod getConstructor()
+        {
+            var routine = _tinfo.RuntimeMethods[Pchp.Core.Reflection.ReflectionUtils.PhpConstructorName];
+            return (routine != null)
+                ? new ReflectionMethod(_tinfo, routine)
+                : null;
+        }
+
         public PhpArray getDefaultProperties() { throw new NotImplementedException(); }
-        public string getDocComment() { throw new NotImplementedException(); }
+        [return: CastToFalse]
+        public string getDocComment() => null;
         public int getEndLine() { throw new NotImplementedException(); }
         //public ReflectionExtension getExtension() { throw new NotImplementedException(); }
         public string getExtensionName() { throw new NotImplementedException(); }
-        public string getFileName() { throw new NotImplementedException(); }
+
+        /// <summary>Gets the filename of the file in which the class has been defined</summary>
+        /// <param name="ctx">Current runtime context</param>
+        /// <returns>Returns the filename of the file in which the class has been defined.
+        /// If the class is defined in the PHP core or in a PHP extension, FALSE is returned.</returns>
+        [return: CastToFalse]
+        public string getFileName(Context ctx)
+        {
+            if (_tinfo.RelativePath != null)
+            {
+                return Path.GetFullPath(Path.Combine(ctx.RootPath, _tinfo.RelativePath));
+            }
+            else
+            {
+                return null;
+            }
+        }
+
         public PhpArray getInterfaceNames()
         {
             var result = new PhpArray();
@@ -157,14 +164,22 @@ namespace Pchp.Library.Reflection
 
             return result;
         }
-        [return: CastToFalse]
+
+        /// <summary>
+        /// Gets a <see cref="ReflectionMethod"/> for a class method.
+        /// </summary>
+        /// <param name="name">The method name to reflect, throws <see cref="ReflectionException"/>
+        /// if the method doesn't exist.</param>
+        /// <returns>A <see cref="ReflectionMethod"/>.</returns>
+        /// <exception cref="ReflectionException"/>
         public ReflectionMethod getMethod(string name)
         {
             var routine = _tinfo.RuntimeMethods[name];
             return (routine != null)
                 ? new ReflectionMethod(_tinfo, routine)
-                : null;
+                : throw new ReflectionException();
         }
+
         public PhpArray getMethods(long filter = -1)
         {
             var result = new PhpArray();
@@ -231,7 +246,11 @@ namespace Pchp.Library.Reflection
         public PhpValue getStaticPropertyValue(string name, PhpAlias def_value) { throw new NotImplementedException(); }
         public PhpArray getTraitAliases() { throw new NotImplementedException(); }
         public PhpArray getTraitNames() { throw new NotImplementedException(); }
-        public PhpArray getTraits() { throw new NotImplementedException(); }
+        public PhpArray getTraits()
+        {
+            // TODO: Retrieve from PhpTypeInfo when traits are supported
+            return PhpArray.NewEmpty();
+        }
         public bool hasConstant(string name) { throw new NotImplementedException(); }
         public bool hasMethod(string name) => _tinfo.RuntimeMethods[name] != null;
         public bool hasProperty(string name) { throw new NotImplementedException(); }
@@ -246,7 +265,25 @@ namespace Pchp.Library.Reflection
         public bool isInterface() => _tinfo.IsInterface;
         public bool isInternal() => !isUserDefined();
         public bool isIterateable() => _tinfo.Type.IsSubclassOf(typeof(Iterator)) || _tinfo.Type.IsSubclassOf(typeof(IteratorAggregate)) || _tinfo.Type.IsSubclassOf(typeof(System.Collections.IEnumerable));
-        public bool isSubclassOf(string @class) { throw new NotImplementedException(); }
+
+        /// <summary>
+        /// Checks if the class is a subclass of a specified class or implements a specified interface.
+        /// </summary>
+        /// <param name="ctx">Current runtime context</param>
+        /// <param name="class">The class name being checked against.</param>
+        /// <returns>Returns TRUE on success or FALSE on failure.</returns>
+        public bool isSubclassOf(Context ctx, string @class)
+        {
+            // Look for the class, use autoload and throw an error if it doesn't exist
+            var base_tinfo = ctx.GetDeclaredType(@class, true);
+            if (base_tinfo == null)
+            {
+                throw new ReflectionException();
+            }
+
+            return base_tinfo.Type.IsAssignableFrom(_tinfo.Type);
+        }
+
         public bool isTrait() => _tinfo.IsTrait;
         public bool isUserDefined() => _tinfo.IsUserType;
         public object newInstance(Context ctx, params PhpValue[] args) => _tinfo.Creator(ctx, args);

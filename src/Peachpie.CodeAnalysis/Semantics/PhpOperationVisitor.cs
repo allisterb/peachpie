@@ -120,7 +120,7 @@ namespace Pchp.CodeAnalysis.Semantics
 
         }
 
-        public virtual void VisitSynthesizedVariableRef(BoundSynthesizedVariableRef x)
+        public virtual void VisitTemporalVariableRef(BoundTemporalVariableRef x)
         {
             // BoundSynthesizedVariableRef is based solely on BoundVariableRef so far 
             VisitVariableRef(x);
@@ -162,6 +162,11 @@ namespace Pchp.CodeAnalysis.Semantics
         public virtual void VisitGlobalConstUse(BoundGlobalConst x)
         {
 
+        }
+
+        public virtual void VisitGlobalConstDecl(BoundGlobalConstDeclStatement x)
+        {
+            Accept(x.Value);
         }
 
         public virtual void VisitPseudoConstUse(BoundPseudoConst x)
@@ -206,7 +211,7 @@ namespace Pchp.CodeAnalysis.Semantics
 
         public virtual void VisitUnset(BoundUnset x)
         {
-            x.VarReferences.ForEach(Accept);
+            Accept(x.Variable);
         }
 
         public virtual void VisitEmptyStatement(BoundEmptyStatement x)
@@ -246,7 +251,7 @@ namespace Pchp.CodeAnalysis.Semantics
 
         public virtual void VisitGlobalStatement(BoundGlobalVariableStatement x)
         {
-            
+            Accept(x.Variable);
         }
 
         public virtual void VisitStaticStatement(BoundStaticVariableStatement x)

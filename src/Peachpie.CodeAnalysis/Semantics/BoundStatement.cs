@@ -7,8 +7,9 @@ using System.Threading.Tasks;
 using Microsoft.CodeAnalysis;
 using System.Collections.Immutable;
 using System.Diagnostics;
-using Devsense.PHP.Syntax.Ast;
+using Ast = Devsense.PHP.Syntax.Ast;
 using Microsoft.CodeAnalysis.Text;
+using Devsense.PHP.Syntax;
 
 namespace Pchp.CodeAnalysis.Semantics
 {
@@ -23,7 +24,7 @@ namespace Pchp.CodeAnalysis.Semantics
 
         public SyntaxNode Syntax => null;
 
-        public LangElement PhpSyntax { get; set; }
+        public Ast.LangElement PhpSyntax { get; set; }
 
         public abstract void Accept(OperationVisitor visitor);
 
@@ -154,7 +155,7 @@ namespace Pchp.CodeAnalysis.Semantics
     {
         public override OperationKind Kind => OperationKind.LocalFunctionStatement;
 
-        internal FunctionDecl FunctionDecl => (FunctionDecl)PhpSyntax;
+        internal Ast.FunctionDecl FunctionDecl => (Ast.FunctionDecl)PhpSyntax;
 
         internal Symbols.SourceFunctionSymbol Function => _function;
         readonly Symbols.SourceFunctionSymbol _function;
@@ -164,7 +165,7 @@ namespace Pchp.CodeAnalysis.Semantics
             Contract.ThrowIfNull(function);
 
             _function = function;
-            this.PhpSyntax = (FunctionDecl)function.Syntax;
+            this.PhpSyntax = (Ast.FunctionDecl)function.Syntax;
         }
 
         public override void Accept(OperationVisitor visitor)
@@ -185,7 +186,7 @@ namespace Pchp.CodeAnalysis.Semantics
     {
         public override OperationKind Kind => OperationKind.LocalFunctionStatement;
 
-        internal TypeDecl TypeDecl => (TypeDecl)PhpSyntax;
+        internal Ast.TypeDecl TypeDecl => (Ast.TypeDecl)PhpSyntax;
 
         internal Symbols.SourceTypeSymbol Type => _type;
         readonly Symbols.SourceTypeSymbol _type;
@@ -216,15 +217,17 @@ namespace Pchp.CodeAnalysis.Semantics
     {
         public override OperationKind Kind => OperationKind.VariableDeclarationStatement;
 
-        ImmutableArray<IVariable> IVariableDeclarationStatement.Variables => ImmutableArray.Create((IVariable)_variable);
+        ImmutableArray<IVariable> IVariableDeclarationStatement.Variables => (_variable.Variable != null)
+            ? ImmutableArray.Create((IVariable)_variable.Variable)
+            : ImmutableArray<IVariable>.Empty;  // unbound yet
 
         /// <summary>
         /// The variable that will be referenced to a global variable.
         /// </summary>
-        public BoundVariable Variable => _variable;
-        readonly BoundVariable _variable;
+        public BoundVariableRef Variable => _variable;
+        readonly BoundVariableRef _variable;
 
-        public BoundGlobalVariableStatement(BoundVariable variable)
+        public BoundGlobalVariableStatement(BoundVariableRef variable)
         {
             _variable = variable;
         }
@@ -238,6 +241,32 @@ namespace Pchp.CodeAnalysis.Semantics
         /// <summary>Invokes corresponding <c>Visit</c> method on given <paramref name="visitor"/>.</summary>
         /// <param name="visitor">A reference to a <see cref="PhpOperationVisitor "/> instance. Cannot be <c>null</c>.</param>
         public override void Accept(PhpOperationVisitor visitor) => visitor.VisitGlobalStatement(this);
+    }
+
+    public sealed partial class BoundGlobalConstDeclStatement : BoundStatement
+    {
+        public override OperationKind Kind => OperationKind.VariableDeclarationStatement;
+
+        public QualifiedName Name { get; private set; }
+        public BoundExpression Value { get; private set; }
+
+        public BoundGlobalConstDeclStatement(QualifiedName name, BoundExpression value)
+        {
+            Debug.Assert(value.Access.IsRead);
+
+            this.Name = name;
+            this.Value = value;
+        }
+
+        public override void Accept(OperationVisitor visitor)
+            => visitor.DefaultVisit(this);
+
+        public override TResult Accept<TArgument, TResult>(OperationVisitor<TArgument, TResult> visitor, TArgument argument)
+            => visitor.DefaultVisit(this, argument);
+
+        /// <summary>Invokes corresponding <c>Visit</c> method on given <paramref name="visitor"/>.</summary>
+        /// <param name="visitor">A reference to a <see cref="PhpOperationVisitor "/> instance. Cannot be <c>null</c>.</param>
+        public override void Accept(PhpOperationVisitor visitor) => visitor.VisitGlobalConstDecl(this);
     }
 
     public sealed partial class BoundStaticVariableStatement : BoundStatement, IVariableDeclarationStatement
@@ -283,11 +312,11 @@ namespace Pchp.CodeAnalysis.Semantics
         /// <summary>
         /// Reference to be unset.
         /// </summary>
-        public ImmutableArray<BoundReferenceExpression> VarReferences { get; set; }
+        public BoundReferenceExpression Variable { get; set; }
 
-        public BoundUnset(ImmutableArray<BoundReferenceExpression> vars)
+        public BoundUnset(BoundReferenceExpression variable)
         {
-            this.VarReferences = vars;
+            this.Variable = variable;
         }
 
         public override void Accept(OperationVisitor visitor)

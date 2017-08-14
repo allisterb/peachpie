@@ -421,7 +421,7 @@ namespace Pchp.CodeAnalysis.Semantics
                     else
                     {
                         ytype = cg.EmitConvertToPhpValue(ytype, 0);
-                        // i8 - value : value
+                        // i8 - value : number
                         return cg.EmitCall(ILOpCode.Call, cg.CoreMethods.PhpNumber.Subtract_long_value)
                             .Expect(cg.CoreTypes.PhpNumber);
                     }
@@ -434,7 +434,10 @@ namespace Pchp.CodeAnalysis.Semantics
                         il.EmitOpCode(ILOpCode.Sub);
                         return cg.CoreTypes.Double;
                     }
-                    throw new NotImplementedException($"Sub(double, {ytype.Name})");
+                    ytype = cg.EmitConvertToPhpValue(ytype, 0);
+                    // r8 - value : double
+                    return cg.EmitCall(ILOpCode.Call, cg.CoreMethods.PhpNumber.Subtract_double_value)
+                            .Expect(cg.CoreTypes.Double);
 
                 case SpecialType.System_String:
                     xtype = cg.EmitCall(ILOpCode.Call, cg.CoreMethods.Operators.ToNumber_String)
@@ -1838,8 +1841,7 @@ namespace Pchp.CodeAnalysis.Semantics
 
                 case Operations.ObjectCast:
                     //Template: "(object)x"
-                    cg.EmitConvert(this.Operand, cg.CoreTypes.Object);
-                    returned_type = cg.CoreTypes.Object;
+                    returned_type = cg.EmitCastToObject(this.Operand);
                     break;
 
                 case Operations.Print:
@@ -2105,16 +2107,44 @@ namespace Pchp.CodeAnalysis.Semantics
         }
     }
 
-    partial class BoundVariableRef
+    partial class BoundVariableName
     {
-        internal override IBoundReference BindPlace(CodeGenerator cg) => this.Variable.BindPlace(cg.Builder, this.Access, this.TypeRefMask);
+        /// <summary>
+        /// Emits the name of variable leaving <c>string</c> on top of evaluation stack.
+        /// </summary>
+        internal TypeSymbol EmitVariableName(CodeGenerator cg)
+        {
+            if (this.IsDirect)
+            {
+                cg.Builder.EmitStringConstant(this.NameValue.Value);
+            }
+            else
+            {
+                cg.EmitConvert(this.NameExpression, cg.CoreTypes.String);
+            }
 
-        internal override IPlace Place(ILBuilder il) => this.Variable.Place(il);
+            //
+            return cg.CoreTypes.String;
+        }
+
+        internal void EmitIntStringKey(CodeGenerator cg)
+        {
+            if (this.IsDirect)
+            {
+                cg.EmitIntStringKey(this.NameValue.Value);
+            }
+            else
+            {
+                cg.EmitIntStringKey(this.NameExpression);
+            }
+        }
     }
 
-    partial class BoundSynthesizedVariableRef
+    partial class BoundVariableRef
     {
-        // Empty because everything is ihnerited from BoundVariableRef at the moment
+        internal override IBoundReference BindPlace(CodeGenerator cg) => this.Variable.BindPlace(cg.Builder, this.Access, this.BeforeTypeRef);
+
+        internal override IPlace Place(ILBuilder il) => this.Variable.Place(il);
     }
 
     partial class BoundListEx : IBoundReference
@@ -2292,12 +2322,21 @@ namespace Pchp.CodeAnalysis.Semantics
         /// In case of instance function call, it is the instance expression,
         /// in case of static method, it is reference to <c>$this</c> which may be needed in some cases.
         /// </summary>
-        /// <returns>Type left on stack. Can be <c>null</c> if no target was emitted.</returns>
+        /// <returns>Type left on stack. Can be <c>null</c> if callsite does not expect a target.</returns>
         internal virtual TypeSymbol EmitTarget(CodeGenerator cg)
         {
             if (Instance != null)
             {
-                return cg.Emit(Instance);
+                cg.Emit(Instance);
+
+                if (Instance.ResultType.SpecialType == SpecialType.System_Void)
+                {
+                    // void: invalid code, should be reported in DiagnosingVisitor
+                    cg.Builder.EmitNullConstant();
+                    return cg.CoreTypes.Object;
+                }
+
+                return Instance.ResultType;
             }
             else
             {
@@ -2309,33 +2348,23 @@ namespace Pchp.CodeAnalysis.Semantics
         {
             // callsite
 
-            var nameOpt = this.CallsiteName;
-            var callsite = cg.Factory.StartCallSite("call_" + nameOpt);
-
+            var callsite = cg.Factory.StartCallSite("call_" + this.CallsiteName);
             var callsiteargs = new List<TypeSymbol>(_arguments.Length);
-            var return_type = this.Access.IsRead
-                    ? this.Access.IsReadRef
-                        ? cg.CoreTypes.PhpAlias.Symbol
-                        : (this.Access.TargetType ?? cg.CoreTypes.PhpValue.Symbol)
-                    : cg.CoreTypes.Void.Symbol;
-
-            // callsite
-            var fldPlace = callsite.Place;
-
+            
             // LOAD callsite.Target
             callsite.EmitLoadTarget(cg.Builder);
 
             // LOAD callsite arguments
 
             // (callsite, [target], ctx, [name], ...)
-            fldPlace.EmitLoad(cg.Builder);
+            callsite.Place.EmitLoad(cg.Builder);
 
             callsiteargs.Add(cg.EmitLoadContext());     // ctx
 
-            var t = EmitTarget(cg);
-            if (t != null)
+            var target = EmitTarget(cg);
+            if (target != null)
             {
-                callsiteargs.Add(t);   // instance
+                callsiteargs.Add(target);   // instance
             }
 
             if (RoutineTypeRef != null)
@@ -2357,6 +2386,13 @@ namespace Pchp.CodeAnalysis.Semantics
 
                 callsiteargs.Add(cg.Emit(a.Value));
             }
+
+            // RETURN TYPE:
+            var return_type = this.Access.IsRead
+                    ? this.Access.IsReadRef
+                        ? cg.CoreTypes.PhpAlias.Symbol
+                        : (this.Access.TargetType ?? cg.CoreTypes.PhpValue.Symbol)
+                    : cg.CoreTypes.Void.Symbol;
 
             // Target()
             var functype = cg.Factory.GetCallSiteDelegateType(
@@ -2565,19 +2601,7 @@ namespace Pchp.CodeAnalysis.Semantics
 
                 //
                 cg.Builder.EmitOpCode(ILOpCode.Dup);    // PhpString
-
-                var t = cg.Emit(expr);
-                if (t == cg.CoreTypes.PhpString)
-                {
-                    cg.EmitCall(ILOpCode.Callvirt, cg.CoreMethods.PhpString.Append_PhpString);
-                }
-                else
-                {
-                    // TODO: PhpValue -> PhpString (instead of String)
-
-                    cg.EmitConvert(t, 0, cg.CoreTypes.String);
-                    cg.EmitCall(ILOpCode.Callvirt, cg.CoreMethods.PhpString.Append_String);
-                }
+                cg.Emit_PhpString_Append(cg.Emit(expr));
 
                 //
                 cg.Builder.EmitOpCode(ILOpCode.Nop);
@@ -2687,15 +2711,16 @@ namespace Pchp.CodeAnalysis.Semantics
             {
                 Debug.Assert(cg.LocalsPlaceOpt != null);
 
-                // Template: <ctx>.Include(dir, path, locals, @this, bool once = false, bool throwOnError = false)
+                // Template: <ctx>.Include(dir, path, locals, @this, self, bool once = false, bool throwOnError = false)
                 cg.EmitLoadContext();
                 cg.Builder.EmitStringConstant(cg.Routine.ContainingFile.DirectoryRelativePath);
                 cg.EmitConvert(_arguments[0].Value, cg.CoreTypes.String);
                 cg.LocalsPlaceOpt.EmitLoad(cg.Builder); // scope of local variables, corresponds to $GLOBALS in global scope.
                 cg.EmitThisOrNull();    // $this
+                cg.EmitCallerRuntimeTypeHandle();    // self : RuntimeTypeHandle
                 cg.Builder.EmitBoolConstant(IsOnceSemantic);
                 cg.Builder.EmitBoolConstant(IsRequireSemantic);
-                return cg.EmitCall(ILOpCode.Callvirt, cg.CoreMethods.Context.Include_string_string_PhpArray_object_bool_bool);
+                return cg.EmitCall(ILOpCode.Callvirt, cg.CoreMethods.Context.Include_string_string_PhpArray_object_RuntimeTypeHandle_bool_bool);
             }
 
             //
@@ -2814,17 +2839,18 @@ namespace Pchp.CodeAnalysis.Semantics
             var unit = this.PhpSyntax.ContainingSourceUnit;
             unit.GetLineColumnFromPosition(this.CodeExpression.PhpSyntax.Span.Start, out line, out col);
 
-            // Template: Operators.Eval(ctx, locals, @this, code, currentpath, line, column)
+            // Template: Operators.Eval(ctx, locals, @this, self, code, currentpath, line, column)
             cg.EmitLoadContext();
             cg.LocalsPlaceOpt.EmitLoad(cg.Builder);
             cg.EmitThisOrNull();
+            cg.EmitCallerRuntimeTypeHandle();           // self : RuntimeTypeHandle
             cg.EmitConvert(this.CodeExpression, cg.CoreTypes.String);   // (string)code
             cg.Builder.EmitStringConstant(filepath);    // currentpath
             cg.Builder.EmitIntConstant(line);           // line
             cg.Builder.EmitIntConstant(col);            // column
 
             // Eval( ... )
-            return cg.EmitCall(ILOpCode.Call, cg.CoreMethods.Operators.Eval_Context_PhpArray_object_string_string_int_int);
+            return cg.EmitCall(ILOpCode.Call, cg.CoreMethods.Operators.Eval_Context_PhpArray_object_RuntimeTypeHandle_string_string_int_int);
         }
     }
 
@@ -3047,25 +3073,47 @@ namespace Pchp.CodeAnalysis.Semantics
 
         static TypeSymbol EmitAppend(CodeGenerator cg, TypeSymbol xtype, BoundExpression y)
         {
+            // LOAD PhpString (X)
+
+            // dereference
+            if (xtype == cg.CoreTypes.PhpAlias)
+            {
+                xtype = cg.Emit_PhpAlias_GetValue();
+            }
+
             if (xtype == cg.CoreTypes.PhpString)
             {
-                // x.Append(y); return x;
-                cg.Builder.EmitOpCode(ILOpCode.Dup);
-
-                cg.EmitConvert(y, cg.CoreTypes.String);
-                cg.EmitCall(ILOpCode.Callvirt, cg.CoreMethods.PhpString.Append_String);
-
-                //
-                return xtype;
+                // keep PhpString on STACK
             }
+            else if (xtype.SpecialType == SpecialType.System_String ||
+                xtype.SpecialType == SpecialType.System_Double ||
+                xtype.SpecialType == SpecialType.System_Boolean ||
+                xtype.SpecialType == SpecialType.System_Int64 ||
+                xtype.SpecialType == SpecialType.System_Object)
+            {
+                // new PhpString(string)
+                cg.EmitConvertToString(xtype, 0);
+                cg.EmitCall(ILOpCode.Newobj, cg.CoreMethods.Ctors.PhpString_string);
+            }
+            //else if (xtype == cg.CoreTypes.PhpString)
+            //{
+            //    // new PhpString(phpstring)
+            //    cg.EmitCall(ILOpCode.Newobj, cg.CoreMethods.Ctors.PhpString_PhpString);
+            //}
             else
             {
-                // concat(x, y)
-                cg.EmitConvert(xtype, 0, cg.CoreTypes.String);
-                cg.EmitConvert(y, cg.CoreTypes.String);
-
-                return cg.EmitCall(ILOpCode.Newobj, cg.CoreMethods.Ctors.PhpString_string_string);
+                // new PhpString(value, Context)
+                cg.EmitConvertToPhpValue(xtype, 0);
+                cg.EmitLoadContext();
+                cg.EmitCall(ILOpCode.Newobj, cg.CoreMethods.Ctors.PhpString_PhpValue_Context);
             }
+
+            // <STACK>.Append (Y)
+            cg.Builder.EmitOpCode(ILOpCode.Dup);
+            cg.Emit_PhpString_Append(cg.Emit(y));
+
+            //
+            return cg.CoreTypes.PhpString;
         }
     }
 
@@ -3184,7 +3232,7 @@ namespace Pchp.CodeAnalysis.Semantics
                 cg.EmitConvert(this.IfFalse, result_type);
                 cg.Builder.EmitBranch(ILOpCode.Br, endLbl);
                 cg.Builder.AdjustStack(-1); // workarounds assert in ILBuilder.MarkLabel, we're doing something wrong with ILBuilder
-                // trueLbl:
+                                            // trueLbl:
                 cg.Builder.MarkLabel(trueLbl);
                 cg.EmitConvert(this.IfTrue, result_type);
 
@@ -3451,14 +3499,10 @@ namespace Pchp.CodeAnalysis.Semantics
                 // ?? PhpArray.Empty
                 if (cg.CoreTypes.PhpArray.Symbol.IsOfType(tArray))
                 {
-                    var lbl_notnull = new NamedLabel("NotNull");
-                    cg.Builder.EmitOpCode(ILOpCode.Dup);
-                    cg.Builder.EmitBranch(ILOpCode.Brtrue, lbl_notnull);
-
-                    cg.Builder.EmitOpCode(ILOpCode.Pop);
-                    cg.EmitCastClass(cg.Emit_PhpArray_Empty(), tArray);
-
-                    cg.Builder.MarkLabel(lbl_notnull);
+                    cg.EmitNullCoalescing((_cg) =>
+                    {
+                        _cg.EmitCastClass(_cg.Emit_PhpArray_Empty(), tArray);
+                    });
                 }
             }
 
@@ -3701,6 +3745,8 @@ namespace Pchp.CodeAnalysis.Semantics
 
         void IBoundReference.EmitStorePrepare(CodeGenerator cg, InstanceCacheHolder instanceOpt)
         {
+            //Debug.Assert(this.Array.Access.EnsureArray || this.Array.Access.IsQuiet);
+
             // Template: array[index]
 
             bool safeToUseIntStringKey = false;
@@ -3710,40 +3756,79 @@ namespace Pchp.CodeAnalysis.Semantics
             //
 
             var tArray = InstanceCacheHolder.EmitInstance(instanceOpt, cg, Array);
-
-            if (tArray.IsOfType(cg.CoreTypes.IPhpArray))
+            if (tArray.IsOfType(cg.CoreTypes.IPhpArray))    // PhpArray, PhpString
             {
                 // ok
                 safeToUseIntStringKey = true;
             }
-            else if (tArray == cg.CoreTypes.PhpAlias)
-            {
-                // PhpAlias.EnsureArray
-                tArray = cg.EmitCall(ILOpCode.Call, cg.CoreMethods.PhpAlias.EnsureArray);
-            }
             else if (this.Array.Access.EnsureArray)
             {
-                // Array had to be ensured already
-                throw new NotImplementedException($"(ensure) STORE {tArray.Name}[]");
+                if (tArray == cg.CoreTypes.PhpAlias)
+                {
+                    // PhpAlias.EnsureArray
+                    tArray = cg.EmitCall(ILOpCode.Call, cg.CoreMethods.PhpAlias.EnsureArray);
+                }
+                else
+                {
+                    // Array should be ensured already
+                    throw new NotImplementedException($"(ensure) STORE {tArray.Name}[]");
+                }
             }
-            else if (this.Array.Access.IsQuiet) // semantics of isempty, unset; otherwise in store operation we should EnsureArray
+            else if (this.Array.Access.IsQuiet)
             {
                 // WRITE semantics, without need of ensuring the underlaying value
+                // isempty, unset; otherwise in store operation we should EnsureArray already
+
+                if (tArray == cg.CoreTypes.PhpAlias)
+                {
+                    // dereference
+                    tArray = cg.Emit_PhpAlias_GetValue();
+                }
 
                 if (tArray == cg.CoreTypes.PhpValue)
                 {
-                    tArray = cg.EmitCall(ILOpCode.Call, cg.CoreMethods.Operators.ToArray_PhpValue);
+                    tArray = cg.EmitCall(ILOpCode.Call, cg.CoreMethods.Operators.GetArrayAccess_PhpValue)
+                        .Expect(cg.CoreTypes.IPhpArray);
+
+                    // Template: <STACK> ?? (IPhpArray)PhpArray.Empty
+                    cg.EmitNullCoalescing((_cg) =>
+                    {
+                        _cg.EmitCastClass(_cg.Emit_PhpArray_Empty(), _cg.CoreTypes.IPhpArray);
+                    });
                 }
                 else if (tArray == cg.CoreTypes.String)
                 {
-                    // new PhpString(string)
+                    // Template: new PhpString(string)
                     tArray = cg.EmitCall(ILOpCode.Newobj, cg.CoreMethods.Ctors.PhpString_string);
                 }
-                else if (tArray == cg.CoreTypes.Void)
+                else if (
+                    tArray == cg.CoreTypes.Void ||
+                    tArray == cg.CoreTypes.Boolean ||
+                    tArray == cg.CoreTypes.Long ||
+                    tArray == cg.CoreTypes.Double ||
+                    tArray.IsOfType(cg.CoreTypes.PhpResource))
                 {
-                    // TODO: uninitialized value, report error
-                    Debug.WriteLine("Use of uninitialized value.");
-                    tArray = cg.EmitCall(ILOpCode.Newobj, cg.CoreMethods.Ctors.PhpString);
+                    // TODO: WRN: use value of type '...' as array
+                    cg.EmitPop(tArray);
+                    tArray = cg.Emit_PhpArray_Empty();
+                }
+                else if (tArray.IsReferenceType)
+                {
+                    // null -> PhpArray.Empty
+                    if (cg.CanBeNull(Array.TypeRefMask))
+                    {
+                        // Template: (object)<STACK> ?? PhpArray.Empty
+                        cg.EmitCastClass(tArray, cg.CoreTypes.Object);
+                        cg.EmitNullCoalescing((_cg) =>
+                        {
+                            _cg.EmitCastClass(_cg.Emit_PhpArray_Empty(), _cg.CoreTypes.Object);
+                        });
+                        tArray = cg.CoreTypes.Object;
+                    }
+
+                    // EnsureArray(<STACK>) or throw
+                    tArray = cg.EmitCall(ILOpCode.Call, cg.CoreMethods.Operators.EnsureArray_Object)
+                        .Expect(cg.CoreTypes.IPhpArray);
                 }
                 else
                 {
@@ -3994,26 +4079,45 @@ namespace Pchp.CodeAnalysis.Semantics
                 return cg.CoreTypes.Void;
             }
 
+            // resolved constant value
             if (this.ConstantValue.HasValue)
             {
                 return cg.EmitLoadConstant(this.ConstantValue.Value, this.Access.TargetType);
             }
 
+            // resolved constant symbol
             if (_boundExpressionOpt != null)
             {
                 _boundExpressionOpt.EmitLoadPrepare(cg);
                 return _boundExpressionOpt.EmitLoad(cg);
             }
 
-            var idxfield = cg.Module.SynthesizedManager
-                .GetOrCreateSynthesizedField(cg.Module.ScriptType, cg.CoreTypes.Int32, $"[const]{this.Name}", Accessibility.Internal, true, false);
+            // the constant has to be resolved in runtime,
+            // make it easier by caching its internal ID for fast lookup
 
-            // <ctx>.GetConstant(<name>, ref <Index of constant>)
+            // Template: internal static int <const>Name;
+            var idxfield = cg.Module.SynthesizedManager.GetGlobalConstantIndexField(Name.ToString());
+
+            Debug.Assert(FallbackName.HasValue == false || Name != FallbackName.Value);
+
+            // Template: Operators.ReadConstant(ctx, name, ref <idxfield> [, fallbackname])
             cg.EmitLoadContext();
-            cg.Builder.EmitStringConstant(this.Name);
+            cg.Builder.EmitStringConstant(this.Name.ToString());
             cg.EmitFieldAddress(idxfield);
-            return cg.EmitCall(ILOpCode.Callvirt, cg.CoreMethods.Context.GetConstant_string_int32)
-                .Expect(cg.CoreTypes.PhpValue);
+
+            if (FallbackName.HasValue)
+            {
+                // we have to try two possible constant names:
+                cg.Builder.EmitStringConstant(this.FallbackName.Value.ToString());
+                return cg.EmitCall(ILOpCode.Call, cg.CoreMethods.Operators.ReadConstant_Context_String_Int_String)
+                    .Expect(cg.CoreTypes.PhpValue);
+            }
+            else
+            {
+                // Operators.ReadConstant(ctx, name, ref <idxfield>)
+                return cg.EmitCall(ILOpCode.Call, cg.CoreMethods.Operators.ReadConstant_Context_String_Int)
+                    .Expect(cg.CoreTypes.PhpValue);
+            }
         }
     }
 
@@ -4119,10 +4223,13 @@ namespace Pchp.CodeAnalysis.Semantics
     {
         internal override TypeSymbol Emit(CodeGenerator cg)
         {
+            Debug.Assert(cg.GeneratorStateMachineMethod != null);
+
             var il = cg.Builder;
 
             // leave result of yield expr. (sent value) on eval stack
-            il.EmitLoadArgumentOpcode(3);
+
+            cg.EmitGeneratorInstance();
             cg.EmitCall(ILOpCode.Call, cg.CoreMethods.Operators.GetGeneratorSentItem_Generator);
 
             // type of expression result is PHP value (sent value)

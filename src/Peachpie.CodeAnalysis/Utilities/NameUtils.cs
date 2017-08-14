@@ -169,6 +169,14 @@ namespace Pchp.CodeAnalysis
         }
 
         /// <summary>
+        /// Gets full CLR name including the namespace part.
+        /// </summary>
+        public static string GetFullName(this NamedTypeSymbol t)
+        {
+            return Microsoft.CodeAnalysis.MetadataHelpers.BuildQualifiedName(t.NamespaceName, t.MetadataName);
+        }
+
+        /// <summary>
         /// Compares two arrays.
         /// </summary>
         public static bool NamesEquals(this Name[] names1, Name[] names2)
@@ -195,6 +203,11 @@ namespace Pchp.CodeAnalysis
         /// Gets value indicating whether given name was not set.
         /// </summary>
         public static bool IsEmpty(this VariableName name) => string.IsNullOrEmpty(name.Value);
+
+        /// <summary>
+        /// Gets value indicating whether given name was not set.
+        /// </summary>
+        public static bool IsValid(this VariableName name) => !IsEmpty(name);
 
         /// <summary>
         /// Gets variable name without leading <c>$</c>.

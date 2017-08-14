@@ -113,7 +113,7 @@ namespace Pchp.Library
         {
             switch (option.ToLowerInvariant())
             {
-                case "SMTP":
+                case "smtp":
                     return (PhpValue)GetSet(ref config.Core.SmtpServer, null, value, action);
 
                 case "smtp_port":
@@ -472,7 +472,7 @@ namespace Pchp.Library
 
             if (action == IniAction.Set)
             {
-                option = newValue.AsCallable();
+                option = newValue.AsCallable(default(RuntimeTypeHandle));
             }
 
             return oldValue;
@@ -591,10 +591,47 @@ namespace Pchp.Library
         #endregion
 
         /// <summary>
+        /// Gets the current include_path configuration option value.
+        /// </summary>
+        public static string get_include_path(Context ctx) => ctx.Configuration.Core.IncludePaths;
+
+        /// <summary>
+        /// Sets the include_path configuration option for the duration of the script.
+        /// </summary>
+        public static string set_include_path(Context ctx, string new_include_path)
+        {
+            var config = ctx.Configuration.Core;
+            var old_value = config.IncludePaths;
+
+            config.IncludePaths = new_include_path;
+
+            return old_value;
+        }
+
+        /// <summary>
         /// Gets the current configuration setting of magic_quotes_gpc.
         /// Always returns <c>false</c>.
         /// </summary>
         /// <returns>Always <c>false</c>.</returns>
         public static bool get_magic_quotes_gpc() => false;
+
+        /// <summary>
+        /// Returns the current active configuration setting of <c>magic_quotes_runtime</c>.
+        /// Always <c>false</c>.
+        /// </summary>
+        /// <returns>Always <c>false</c>.</returns>
+        public static bool get_magic_quotes_runtime() => false;
+
+        /// <summary>
+        /// Set the current active configuration setting of <c>magic_quotes_runtime</c>.
+        /// Deprecated and ignored.
+        /// </summary>
+        /// <param name="value">Ignored.</param>
+        /// <returns>Always <c>false</c>.</returns>
+        public static bool set_magic_quotes_runtime(bool value)
+        {
+            PhpException.FunctionDeprecated("set_magic_quotes_runtime");
+            return false;
+        }
     }
 }

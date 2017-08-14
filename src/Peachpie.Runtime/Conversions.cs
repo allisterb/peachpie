@@ -61,6 +61,11 @@ namespace Pchp.Core
         /// In case of a non class object, boxes value to an object.
         /// </summary>
         object ToClass();
+
+        /// <summary>
+        /// Converts the object to array.
+        /// </summary>
+        PhpArray ToArray();
     }
 
     #endregion
@@ -110,6 +115,30 @@ namespace Pchp.Core
             {
                 return value.ToString();
             }
+        }
+
+        #endregion
+
+        #region ToChar
+
+        /// <summary>
+		/// Converts string to a single character.
+		/// </summary>
+		/// <param name="str">The string to convert.</param>
+		/// <returns>The first character of the string.</returns>
+		/// <exception cref="PhpException"><paramref name="str"/> doesn't consist of a single character. (Warning)</exception>
+		public static char ToChar(string str)
+        {
+            if (str == null || str.Length != 1)
+            {
+                PhpException.Throw(PhpError.Warning, Resources.ErrResources.string_should_be_single_character);
+                if (string.IsNullOrEmpty(str))
+                {
+                    return '\0';
+                }
+            }
+
+            return str[0];
         }
 
         #endregion
@@ -200,7 +229,11 @@ namespace Pchp.Core
             }
             else
             {
-                if (obj is Array)
+                if (obj is IPhpConvertible conv)
+                {
+                    return conv.ToArray();
+                }
+                else if (obj is Array)
                 {
                     // [] -> array
                     return new PhpArray((Array)obj);
@@ -265,12 +298,12 @@ namespace Pchp.Core
         /// <summary>
         /// Gets value as a callable object that can be invoked dynamically.
         /// </summary>
-        public static IPhpCallable AsCallable(PhpValue value) => value.AsCallable();
+        public static IPhpCallable AsCallable(PhpValue value, RuntimeTypeHandle callerCtx) => value.AsCallable(callerCtx);
 
         /// <summary>
         /// Creates a callable object from string value.
         /// </summary>
-        public static IPhpCallable AsCallable(string value) => PhpCallback.Create(value);
+        public static IPhpCallable AsCallable(string value, RuntimeTypeHandle callerCtx) => PhpCallback.Create(value, callerCtx);
 
         /// <summary>
         /// Resolves whether given instance <paramref name="obj"/> is of given type <paramref name="tinfo"/>.
@@ -278,7 +311,7 @@ namespace Pchp.Core
         /// <param name="obj">Value to be checked.</param>
         /// <param name="tinfo">Type descriptor.</param>
         /// <returns>Whether <paramref name="obj"/> is of type <paramref name="tinfo"/>.</returns>
-        public static bool IsInstanceOf(object obj, Reflection.PhpTypeInfo tinfo)
+        public static bool IsInstanceOf(object obj, PhpTypeInfo tinfo)
         {
             // note: if tinfo is null =>
             // type was not declared =>

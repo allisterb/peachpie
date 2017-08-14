@@ -286,6 +286,72 @@ namespace Pchp.Core
             public void SetItemValue(PhpValue index, PhpValue value) => _array.offsetSet(index, value);
         }
 
+        sealed class ListAsPhpArray : IPhpArray
+        {
+            readonly IList _array;
+
+            public ListAsPhpArray(IList array)
+            {
+                Debug.Assert(array != null);
+                _array = array;
+            }
+
+            object ToObject(PhpValue value) => value.ToClr();    // TODO, type conversion
+
+            public int Count => _array.Count;
+
+            public void AddValue(PhpValue value)
+            {
+                _array.Add(ToObject(value));
+            }
+
+            public PhpAlias EnsureItemAlias(IntStringKey key) => GetItemValue(key).EnsureAlias();
+
+            public IPhpArray EnsureItemArray(IntStringKey key) => GetItemValue(key).EnsureArray();
+
+            public object EnsureItemObject(IntStringKey key) => GetItemValue(key).EnsureObject();
+
+            public PhpValue GetItemValue(IntStringKey key)
+            {
+                if (key.IsInteger)
+                    return PhpValue.FromClr(_array[key.Integer]);
+                else
+                    throw new ArgumentException(nameof(key));
+            }
+
+            public PhpValue GetItemValue(PhpValue index) => GetItemValue(index.ToIntStringKey());
+
+            public void RemoveKey(IntStringKey key)
+            {
+                if (key.IsInteger)
+                    _array.RemoveAt(key.Integer);
+                else
+                    throw new ArgumentException(nameof(key));
+            }
+
+            public void RemoveKey(PhpValue index) => RemoveKey(index.ToIntStringKey());
+
+            public void SetItemAlias(IntStringKey key, PhpAlias alias)
+            {
+                if (key.IsInteger)
+                    _array[key.Integer] = ToObject(alias.Value);
+                else
+                    throw new ArgumentException(nameof(key));
+            }
+
+            public void SetItemAlias(PhpValue index, PhpAlias alias) => SetItemAlias(index.ToIntStringKey(), alias);
+
+            public void SetItemValue(IntStringKey key, PhpValue value)
+            {
+                if (key.IsInteger)
+                    _array[key.Integer] = ToObject(value);
+                else
+                    throw new ArgumentException(nameof(key));
+            }
+
+            public void SetItemValue(PhpValue index, PhpValue value) => SetItemValue(index.ToIntStringKey(), value);
+        }
+
         public static IPhpArray EnsureArray(ArrayAccess obj)
         {
             Debug.Assert(obj != null);
@@ -297,9 +363,18 @@ namespace Pchp.Core
             // ArrayAccess
             if (obj is ArrayAccess) return EnsureArray((ArrayAccess)obj);
 
-            // TODO: Fatal error: Uncaught Error: Cannot use object of type {0} as array
-            throw new InvalidOperationException(string.Format(Resources.ErrResources.object_used_as_array, obj.GetType().FullName));
+            // IPhpArray
+            if (obj is IPhpArray) return (IPhpArray)obj;
+
+            // IList
+            if (obj is IList) return new ListAsPhpArray((IList)obj);
+
+            // Fatal error: Uncaught Error: Cannot use object of type {0} as array
+            PhpException.Throw(PhpError.Error, Resources.ErrResources.object_used_as_array, obj.GetPhpTypeInfo().Name);
+            throw new ArgumentException(nameof(obj));
         }
+
+        public static IPhpArray GetArrayAccess(PhpValue value) => value.GetArrayAccess();
 
         /// <summary>
         /// Implements <c>[]</c> operator on <see cref="string"/>.
@@ -451,6 +526,52 @@ namespace Pchp.Core
             // 3. __unset
 
             throw new NotImplementedException();
+        }
+
+        #endregion
+
+        #region self, parent
+
+        /// <summary>
+        /// Gets <see cref="PhpTypeInfo"/> of self.
+        /// Throws in case of self being used out of class context.
+        /// </summary>
+        public static PhpTypeInfo GetSelf(RuntimeTypeHandle self)
+        {
+            if (self.Equals(default(RuntimeTypeHandle)))
+            {
+                PhpException.ThrowSelfOutOfClass();
+            }
+
+            //
+            return self.GetPhpTypeInfo();
+        }
+
+        /// <summary>
+        /// Gets <see cref="PhpTypeInfo"/> of parent.
+        /// Throws in case of parent being used out of class context or within a parentless class.
+        /// </summary>
+        public static PhpTypeInfo GetParent(RuntimeTypeHandle self)
+        {
+            if (self.Equals(default(RuntimeTypeHandle)))
+            {
+                PhpException.Throw(PhpError.Error, Resources.ErrResources.parent_used_out_of_class);
+            }
+            else
+            {
+                var t = self.GetPhpTypeInfo().BaseType;
+                if (t != null)
+                {
+                    return t;
+                }
+                else
+                {
+                    PhpException.Throw(PhpError.Error, Resources.ErrResources.parent_accessed_in_parentless_class);
+                }
+            }
+
+            //
+            throw new ArgumentException(nameof(self));
         }
 
         #endregion
@@ -746,10 +867,14 @@ namespace Pchp.Core
                     break;
 
                 case PhpTypeCode.Object:
-                    var traversable = argument.Object as Traversable;
-                    if (traversable != null)
+                    if (argument.Object is Traversable traversable)
                     {
                         Unpack(stack, traversable, byrefs);
+                        break;
+                    }
+                    else if (argument.Object is Array array)
+                    {
+                        Unpack(stack, array, byrefs);
                         break;
                     }
                     else
@@ -767,6 +892,7 @@ namespace Pchp.Core
                     break;
             }
         }
+
 
         /// <summary>
         /// The method implements <c>...</c> unpack operator.
@@ -803,6 +929,21 @@ namespace Pchp.Core
 
         /// <summary>
         /// The method implements <c>...</c> unpack operator.
+        /// Unpacks <paramref name="array"/> into <paramref name="stack"/>.
+        /// </summary>
+        /// <param name="stack">The list with unpacked arguments.</param>
+        /// <param name="array">Value to be unpacked.</param>
+        /// <param name="byrefs">Bit mask of parameters that are passed by reference. Arguments corresponding to <c>1</c>-bit are aliased.</param>
+        static void Unpack(List<PhpValue> stack, Array array, ulong byrefs)
+        {
+            for (int i = 0; i < array.Length; i++)
+            {
+                stack.Add(PhpValue.FromClr(array.GetValue(i)));
+            }
+        }
+
+        /// <summary>
+        /// The method implements <c>...</c> unpack operator.
         /// Unpacks <paramref name="traversable"/> into <paramref name="stack"/>.
         /// </summary>
         /// <param name="stack">The list with unpacked arguments.</param>
@@ -830,6 +971,56 @@ namespace Pchp.Core
 
         #endregion
 
+        #region ReadConstant
+
+        /// <summary>
+        /// Gets constant value, throws <c>notice</c> if constant is not defined.
+        /// </summary>
+        public static PhpValue ReadConstant(Context ctx, string name, ref int idx)
+        {
+            Debug.Assert(name != null, nameof(name));
+
+            PhpValue value;
+            if (ctx.TryGetConstant(name, out value, ref idx) == false)
+            {
+                // Warning: undefined constant
+                PhpException.Throw(PhpError.Notice, Resources.ErrResources.undefined_constant, name);
+                value = (PhpValue)name;
+            }
+
+            return value;
+        }
+
+        /// <summary>
+        /// Gets constant value, throws <c>notice</c> if constant is not defined.
+        /// </summary>
+        public static PhpValue ReadConstant(Context ctx, string name, ref int idx, string fallbackName)
+        {
+            Debug.Assert(name != null, nameof(name));
+            Debug.Assert(fallbackName != null, nameof(fallbackName));
+
+            PhpValue value;
+            if (ctx.TryGetConstant(name, out value, ref idx) == false &&
+                ctx.TryGetConstant(fallbackName, out value) == false)
+            {
+                // Warning: undefined constant
+                PhpException.Throw(PhpError.Notice, Resources.ErrResources.undefined_constant, fallbackName);
+                value = (PhpValue)fallbackName;
+            }
+
+            return value;
+        }
+
+        /// <summary>
+        /// Constant declaration.
+        /// </summary>
+        public static void DeclareConstant(Context ctx, string name, ref int idx, PhpValue value)
+        {
+            ctx.DefineConstant(name, value, ref idx, ignorecase: false);
+        }
+
+        #endregion
+
         #region BuildClosure
 
         /// <summary>
@@ -844,7 +1035,7 @@ namespace Pchp.Core
         /// <summary>
         /// Create <see cref="Generator"/> with specified state machine function and parameters.
         /// </summary>
-        public static Generator BuildGenerator(Context ctx, object @this, PhpArray locals, GeneratorStateMachineDelegate method) => new Generator(ctx, @this, locals, method);
+        public static Generator BuildGenerator(Context ctx, object @this, PhpArray locals, PhpArray tmpLocals, GeneratorStateMachineDelegate method) => new Generator(ctx, @this, locals, tmpLocals, method);
 
         public static int GetGeneratorState(Generator g) => g._state;
 
@@ -880,7 +1071,7 @@ namespace Pchp.Core
         /// Performs dynamic code evaluation in given context.
         /// </summary>
         /// <returns>Evaluated code return value.</returns>
-        public static PhpValue Eval(Context ctx, PhpArray locals, object @this, string code, string currentpath, int line, int column)
+        public static PhpValue Eval(Context ctx, PhpArray locals, object @this, RuntimeTypeHandle self, string code, string currentpath, int line, int column)
         {
             Debug.Assert(ctx != null);
             Debug.Assert(locals != null);
@@ -901,7 +1092,7 @@ namespace Pchp.Core
                 code);
 
             //
-            return script.Evaluate(ctx, locals, @this);
+            return script.Evaluate(ctx, locals, @this, self);
         }
 
         #endregion

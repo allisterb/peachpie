@@ -12,75 +12,11 @@ using Pchp.CodeAnalysis.Symbols;
 using Pchp.CodeAnalysis.CodeGen;
 using Microsoft.CodeAnalysis.CodeGen;
 using Devsense.PHP.Syntax;
-using Devsense.PHP.Syntax.Ast;
+using Ast = Devsense.PHP.Syntax.Ast;
 
 namespace Pchp.CodeAnalysis.Semantics
 {
-    #region BoundAccess, AccessMask
-
-    [Flags]
-    public enum AccessMask
-    {
-        /// <summary>
-        /// Serves for case when Expression is body of a ExpressionStmt.
-        /// It is useless to push its value on the stack in that case.
-        /// </summary>
-        None = 0,
-
-        /// <summary>
-        /// The result value will be read first.
-        /// </summary>
-        Read = 1,
-
-        /// <summary>
-        /// A value will be written to the place.
-        /// Only available for VariableUse (variables, fields, properties, array items, references).
-        /// </summary>
-        Write = 2,
-
-        /// <summary>
-        /// The expression will be aliased and the alias will be read.
-        /// </summary>
-        ReadRef = 4 | Read,
-
-        /// <summary>
-        /// The expression will be read by value and copied.
-        /// </summary>
-        ReadCopy = 8 | Read,
-
-        /// <summary>
-        /// An aliased value will be written to the place.
-        /// Only available for VariableUse (variables, fields, properties, array items, references).
-        /// </summary>
-        WriteRef = 16 | Write,
-
-        /// <summary>
-        /// The expression is accessed as a part of chain,
-        /// its member field will be written to.
-        /// E.g. (EnsureObject)->Field = Value
-        /// </summary>
-        EnsureObject = 32 | Read,
-
-        /// <summary>
-        /// The expression is accessed as a part of chain,
-        /// its item entry will be written to.
-        /// E.g. (EnsureArray)[] = Value
-        /// </summary>
-        EnsureArray = 64 | Read,
-
-        /// <summary>
-        /// Read is check only and won't result in an exception in case the variable does not exist.
-        /// </summary>
-        ReadQuiet = 128,
-
-        /// <summary>
-        /// The variable will be unset. Combined with <c>quiet</c> flag, valid for variables, array entries and fields.
-        /// </summary>
-        Unset = 256,
-
-        // NOTE: WriteAndReadRef has to be constructed by semantic binder as bound expression with Write and another bound expression with ReadRef
-        // NOTE: ReadAndWriteAndReadRef has to be constructed by semantic binder as bound expression with Read|Write and another bound expression with ReadRef
-    }
+    #region BoundAccess
 
     /// <summary>
     /// Expression access information.
@@ -274,6 +210,11 @@ namespace Pchp.CodeAnalysis.Semantics
         public static BoundAccess Unset => new BoundAccess(AccessMask.Unset | AccessMask.ReadQuiet, null, 0);
 
         /// <summary>
+        /// Check for isset.
+        /// </summary>
+        public static BoundAccess Isset => new BoundAccess(AccessMask.Isset, null, 0);
+
+        /// <summary>
         /// Expression won't be read or written to.
         /// </summary>
         public static BoundAccess None => new BoundAccess(AccessMask.None, null, 0);
@@ -310,7 +251,7 @@ namespace Pchp.CodeAnalysis.Semantics
 
         public SyntaxNode Syntax => null;
 
-        public LangElement PhpSyntax { get; set; }
+        public Ast.LangElement PhpSyntax { get; set; }
 
         /// <summary>
         /// Whether the expression needs current <c>Pchp.Core.Context</c> to be evaluated.
@@ -809,7 +750,7 @@ namespace Pchp.CodeAnalysis.Semantics
 
         public override bool RequiresContext => Left.RequiresContext || Right.RequiresContext;
 
-        public Operations Operation { get; private set; }
+        public Ast.Operations Operation { get; private set; }
 
         public BoundExpression Left { get; private set; }
         public BoundExpression Right { get; private set; }
@@ -828,7 +769,7 @@ namespace Pchp.CodeAnalysis.Semantics
         public override TResult Accept<TArgument, TResult>(OperationVisitor<TArgument, TResult> visitor, TArgument argument)
             => visitor.VisitBinaryOperatorExpression(this, argument);
 
-        internal BoundBinaryEx(BoundExpression left, BoundExpression right, Operations op)
+        internal BoundBinaryEx(BoundExpression left, BoundExpression right, Ast.Operations op)
         {
             this.Left = left;
             this.Right = right;
@@ -846,13 +787,13 @@ namespace Pchp.CodeAnalysis.Semantics
 
     public partial class BoundUnaryEx : BoundExpression, IUnaryOperatorExpression
     {
-        public Operations Operation { get; private set; }
+        public Ast.Operations Operation { get; private set; }
 
         public BoundExpression Operand { get; set; }
 
         public override OperationKind Kind => OperationKind.UnaryOperatorExpression;
 
-        public override bool RequiresContext => Operation == Operations.StringCast || Operation == Operations.Print || Operand.RequiresContext;
+        public override bool RequiresContext => Operation == Ast.Operations.StringCast || Operation == Ast.Operations.Print || Operand.RequiresContext;
 
         IExpression IUnaryOperatorExpression.Operand => Operand;
 
@@ -862,7 +803,7 @@ namespace Pchp.CodeAnalysis.Semantics
 
         public UnaryOperationKind UnaryOperationKind { get { throw new NotSupportedException(); } }
 
-        public BoundUnaryEx(BoundExpression operand, Operations op)
+        public BoundUnaryEx(BoundExpression operand, Ast.Operations op)
         {
             Contract.ThrowIfNull(operand);
             this.Operand = operand;
@@ -891,7 +832,7 @@ namespace Pchp.CodeAnalysis.Semantics
         public override OperationKind Kind => OperationKind.IncrementExpression;
 
         public BoundIncDecEx(BoundReferenceExpression target, UnaryOperationKind kind)
-            : base(target, new BoundLiteral(1L).WithAccess(BoundAccess.Read), Operations.IncDec)
+            : base(target, new BoundLiteral(1L).WithAccess(BoundAccess.Read), Ast.Operations.IncDec)
         {
             Debug.Assert(
                 kind == UnaryOperationKind.OperatorPostfixDecrement ||
@@ -1000,9 +941,9 @@ namespace Pchp.CodeAnalysis.Semantics
 
         public bool UsesOperatorMethod => this.Operator != null;
 
-        public Operations Operation { get; private set; }
+        public Ast.Operations Operation { get; private set; }
 
-        public BoundCompoundAssignEx(BoundReferenceExpression target, BoundExpression value, Operations op)
+        public BoundCompoundAssignEx(BoundReferenceExpression target, BoundExpression value, Ast.Operations op)
             : base(target, value)
         {
             this.Operation = op;
@@ -1090,6 +1031,11 @@ namespace Pchp.CodeAnalysis.Semantics
         public override OperationKind Kind => OperationKind.LocalReferenceExpression;
 
         /// <summary>
+        /// The type of variable before it gets accessed by this expression.
+        /// </summary>
+        internal TypeRefMask BeforeTypeRef { get; set; }
+
+        /// <summary>
         /// Local in case of the variable is resolved local variable.
         /// </summary>
         ILocalSymbol ILocalReferenceExpression.Local => this.Variable?.Symbol as ILocalSymbol;
@@ -1117,7 +1063,7 @@ namespace Pchp.CodeAnalysis.Semantics
     /// <remarks>
     /// Inheriting from <c>BoundVariableRef</c> is just a temporary measure. Do NOT take dependencies on anything but <c>IReferenceExpression</c>.
     /// </remarks>
-    public partial class BoundSynthesizedVariableRef : BoundVariableRef
+    public partial class BoundTemporalVariableRef : BoundVariableRef
     {
 
         // TODO: Maybe change to visitor.VisitSyntheticLocalReferenceExpression
@@ -1129,29 +1075,9 @@ namespace Pchp.CodeAnalysis.Semantics
 
         /// <summary>Invokes corresponding <c>Visit</c> method on given <paramref name="visitor"/>.</summary>
         /// <param name="visitor">A reference to a <see cref="PhpOperationVisitor "/> instance. Cannot be <c>null</c>.</param>
-        public override void Accept(PhpOperationVisitor visitor) => visitor.VisitSynthesizedVariableRef(this);
+        public override void Accept(PhpOperationVisitor visitor) => visitor.VisitTemporalVariableRef(this);
 
-        public BoundSynthesizedVariableRef(string name) : base(new BoundVariableName(new VariableName(name))) { }
-
-        // TODO: Change to new dotnet's System.ValueType
-        internal static Roslyn.Utilities.ValueTuple<BoundReferenceExpression, BoundAssignEx> CreateAndAssignSynthesizedVariable(BoundExpression expr, BoundAccess access, string name)
-        {
-            // determine whether the synthesized variable should be by ref (for readRef and writes) or a normal PHP copy
-            var refAccess = (access.IsReadRef || access.IsWrite);
-
-            // bind assigment target variable with appropriate access
-            var targetVariable = new BoundSynthesizedVariableRef(name);
-            targetVariable.Access = (refAccess) ? targetVariable.Access.WithWriteRef(0) : targetVariable.Access.WithWrite(0);
-
-            // set appropriate access of the original value expression
-            var valueBeingMoved = (refAccess) ? expr.WithAccess(BoundAccess.ReadRef) : expr.WithAccess(BoundAccess.Read);
-
-            // bind assigment and reference to the created synthesized variable
-            var assigment = new BoundAssignEx(targetVariable, valueBeingMoved);
-            var boundExpr = new BoundSynthesizedVariableRef(name).WithAccess(access);
-
-            return new Roslyn.Utilities.ValueTuple<BoundReferenceExpression, BoundAssignEx>(boundExpr, assigment);
-        }
+        public BoundTemporalVariableRef(string name) : base(new BoundVariableName(new VariableName(name))) { }
     }
 
     #endregion
@@ -1424,11 +1350,17 @@ namespace Pchp.CodeAnalysis.Semantics
         /// <summary>
         /// Constant name.
         /// </summary>
-        public string Name { get; private set; }
+        public QualifiedName Name { get; private set; }
 
-        public BoundGlobalConst(string name)
+        /// <summary>
+        /// Alternative constant name if <see cref="Name"/> is not resolved.
+        /// </summary>
+        public QualifiedName? FallbackName { get; private set; }
+
+        public BoundGlobalConst(QualifiedName name, QualifiedName? fallbackName)
         {
             this.Name = name;
+            this.FallbackName = fallbackName;
         }
 
         /// <summary>
@@ -1455,9 +1387,9 @@ namespace Pchp.CodeAnalysis.Semantics
     {
         public override OperationKind Kind => OperationKind.None;
 
-        public PseudoConstUse.Types Type { get; private set; }
+        public Ast.PseudoConstUse.Types Type { get; private set; }
 
-        public BoundPseudoConst(PseudoConstUse.Types type)
+        public BoundPseudoConst(Ast.PseudoConstUse.Types type)
         {
             this.Type = type;
         }
@@ -1479,13 +1411,13 @@ namespace Pchp.CodeAnalysis.Semantics
 
     public partial class BoundPseudoClassConst : BoundExpression
     {
-        public PseudoClassConstUse.Types Type { get; private set; }
+        public Ast.PseudoClassConstUse.Types Type { get; private set; }
 
         public override OperationKind Kind => OperationKind.None;
 
         public BoundTypeRef TargetType { get; private set; }
 
-        public BoundPseudoClassConst(BoundTypeRef targetType, PseudoClassConstUse.Types type)
+        public BoundPseudoClassConst(BoundTypeRef targetType, Ast.PseudoClassConstUse.Types type)
         {
             this.TargetType = targetType;
             this.Type = type;

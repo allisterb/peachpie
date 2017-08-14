@@ -385,9 +385,11 @@ namespace Pchp.CodeAnalysis.FlowAnalysis
         {
             if (boundvar.Name != null)  // direct variable name
             {
-                if (boundvar.VariableKind == VariableKind.LocalVariable || boundvar.VariableKind == VariableKind.Parameter)
+                if (boundvar.VariableKind == VariableKind.LocalVariable || 
+                    boundvar.VariableKind == VariableKind.Parameter || 
+                    boundvar.VariableKind == VariableKind.LocalTemporalVariable)
                 {
-                    varHandle = state.GetLocalHandle(boundvar.Name);
+                    varHandle = state.GetLocalHandle(new VariableName(boundvar.Name));
                     return true;
                 }
             }

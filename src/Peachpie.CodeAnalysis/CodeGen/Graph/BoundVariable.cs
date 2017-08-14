@@ -40,8 +40,10 @@ namespace Pchp.CodeAnalysis.Semantics
 
         internal override void EmitInit(CodeGenerator cg)
         {
-            if (cg.HasUnoptimizedLocals)
+
+            if (VariableKind == VariableKind.LocalTemporalVariable || cg.HasUnoptimizedLocals)
             {
+                // temporal variables must be indirect
                 return;
             }
 
@@ -71,8 +73,14 @@ namespace Pchp.CodeAnalysis.Semantics
 
         internal override IBoundReference BindPlace(ILBuilder il, BoundAccess access, TypeRefMask thint)
         {
-            if (_place == null)
+            if (VariableKind == VariableKind.LocalTemporalVariable)
             {
+                // Temporal variables must be indirect
+                return new BoundIndirectTemporalVariablePlace(new BoundLiteral(this.Name), access);
+            }
+
+            if (_place == null)
+            {                
                 // unoptimized locals
                 return new BoundIndirectVariablePlace(new BoundLiteral(this.Name), access);
             }
@@ -85,6 +93,15 @@ namespace Pchp.CodeAnalysis.Semantics
         internal override IPlace Place(ILBuilder il) => LocalPlace(il);
 
         private IPlace LocalPlace(ILBuilder il) => _place;
+
+        /// <summary>
+        /// Creates local bound to a place.
+        /// </summary>
+        internal static BoundLocal CreateFromPlace(IPlace place)
+        {
+            Contract.ThrowIfNull(place);
+            return new BoundLocal(null) { _place = place };
+        }
     }
 
     partial class BoundIndirectLocal

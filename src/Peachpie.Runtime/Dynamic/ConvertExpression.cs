@@ -55,7 +55,7 @@ namespace Pchp.Core.Dynamic
             if (target == typeof(PhpValue)) return BindToValue(arg);
             if (target == typeof(void)) return BindToVoid(arg);
             if (target == typeof(object)) return BindAsObject(arg);
-            if (target == typeof(PhpArray)) return BindToArray(arg);
+            if (target == typeof(PhpArray) || target == typeof(IPhpArray) || target == typeof(IPhpEnumerable) || target == typeof(PhpHashtable)) return BindToArray(arg);   // TODO: BindToXXXX(), cast object to IPhpEnumerable if Value.IsObject
             if (target == typeof(IPhpArray)) return BindToArray(arg);   // TODO
             if (target == typeof(IntStringKey)) return BindIntStringKey(arg);
             if (target == typeof(IPhpCallable)) return BindAsCallable(arg);
@@ -124,7 +124,7 @@ namespace Pchp.Core.Dynamic
             throw new NotImplementedException(source.FullName);
         }
 
-        private static Expression BindToBool(Expression expr)
+        public static Expression BindToBool(Expression expr)
         {
             var source = expr.Type;
 
@@ -240,6 +240,7 @@ namespace Pchp.Core.Dynamic
             if (source == typeof(void)) return VoidAsConstant(expr, PhpNumber.Default, typeof(PhpNumber));
             if (source == typeof(PhpNumber)) return expr;
             if (source == typeof(PhpValue)) return Expression.Convert(expr, typeof(PhpNumber));
+            if (source == typeof(string)) return Expression.Call(Cache.Operators.ToPhpNumber_String, expr);
 
             throw new NotImplementedException(source.FullName);
         }
@@ -327,7 +328,7 @@ namespace Pchp.Core.Dynamic
 
             if (typeof(IPhpCallable).GetTypeInfo().IsAssignableFrom(source.GetTypeInfo())) return expr;
 
-            return Expression.Call(BindToValue(expr), Cache.Operators.PhpValue_AsCallable);
+            return Expression.Call(BindToValue(expr), Cache.Operators.PhpValue_AsCallable_RuntimeTypeHandle, Expression.Default(typeof(RuntimeTypeHandle)));    // TODO: call context instead of default()
         }
 
         private static Expression BindToVoid(Expression expr)
@@ -391,6 +392,11 @@ namespace Pchp.Core.Dynamic
                 return Expression.Constant(ConversionCost.Pass);
             }
 
+            if (target == typeof(PhpAlias) || target == typeof(PhpValue))
+            {
+                return Expression.Constant(ConversionCost.PassCostly);
+            }
+
             if (t == typeof(PhpValue)) return BindCostFromValue(arg, target);
             if (t == typeof(double)) return Expression.Constant(BindCostFromDouble(arg, target));
             if (t == typeof(long) || t == typeof(int)) return Expression.Constant(BindCostFromLong(arg, target));
@@ -400,9 +406,6 @@ namespace Pchp.Core.Dynamic
 
             // other types
             if (t.GetTypeInfo().IsAssignableFrom(target.GetTypeInfo())) return Expression.Constant(ConversionCost.Pass);
-
-            // anything -> PhpValue 
-            if (target == typeof(PhpValue)) return Expression.Constant(ConversionCost.PassCostly);
 
             //
             throw new NotImplementedException($"costof({t} -> {target})");
@@ -425,6 +428,11 @@ namespace Pchp.Core.Dynamic
             if (target_type.IsEnum)
             {
                 return Expression.Call(typeof(CostOf).GetMethod("ToInt64", arg.Type), arg);
+            }
+
+            if (target == typeof(PhpArray) || target == typeof(IPhpArray) || target == typeof(IPhpEnumerable) || target == typeof(PhpHashtable))
+            {
+                return Expression.Call(typeof(CostOf).GetMethod("ToPhpArray", arg.Type), arg);
             }
 
             //

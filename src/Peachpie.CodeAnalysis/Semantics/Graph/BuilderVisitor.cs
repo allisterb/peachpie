@@ -392,6 +392,11 @@ namespace Pchp.CodeAnalysis.Semantics.Graph
             base.VisitNamespaceDecl(x);
         }
 
+        public override void VisitGlobalConstDeclList(GlobalConstDeclList x)
+        {
+            Add(x);
+        }
+
         #endregion
 
         #region Flow-Thru Statements
@@ -715,9 +720,9 @@ namespace Pchp.CodeAnalysis.Semantics.Graph
             // -> the switch value might get evaluated multiple times (see SwitchEdge.Generate) -> preemptively evaluate and cache it
             if (!switchValue.IsConstant() && !cases.All(c => c.CaseValue.IsOnlyBoundElement))
             {
-                var result = BoundSynthesizedVariableRef.CreateAndAssignSynthesizedVariable(switchValue, BoundAccess.Read, $"<switchValueCacher>{x.Span}");
-                switchValue = result.Item1;
-                _current.Add(new BoundExpressionStatement(result.Item2));
+                var result = GeneratorSemanticsBinder.CreateAndAssignSynthesizedVariable(switchValue, BoundAccess.Read, $"<switchValueCacher>{x.Span}");
+                switchValue = result.BoundExpr;
+                _current.Add(new BoundExpressionStatement(result.Assignment));
             }
 
             // SwitchEdge // Connects _current to cases

@@ -69,16 +69,21 @@ namespace Pchp.CodeAnalysis.Semantics
             }
         }
 
-        BoundVariable CreateVariable(VariableName name, TextSpan span)
+        BoundVariable CreateAutoGlobal(VariableName name, TextSpan span)
         {
-            if (name.IsAutoGlobal)
-            {
-                return new BoundSuperGlobalVariable(name);
-            }
-            else
-            {
-                return new BoundLocal(new SourceLocalSymbol(_routine, name.Value, span));
-            }
+            Debug.Assert(name.IsAutoGlobal);
+            return new BoundSuperGlobalVariable(name);
+        }
+
+        BoundVariable CreateLocal(VariableName name, TextSpan span)
+        {
+            Debug.Assert(!name.IsAutoGlobal);
+            return new BoundLocal(new SourceLocalSymbol(_routine, name.Value, span));
+        }
+
+        BoundVariable CreateTemporal(VariableName name, TextSpan span)
+        {
+            return new BoundLocal(new SourceLocalSymbol(_routine, name.Value, span), VariableKind.LocalTemporalVariable);
         }
 
         #region Public methods
@@ -106,22 +111,28 @@ namespace Pchp.CodeAnalysis.Semantics
             return Variables;
         }
 
-        /// <summary>
-        /// Gets local variable or create local if not yet.
-        /// </summary>
-        public BoundVariable BindVariable(VariableName varname, TextSpan span)
+        BoundVariable BindVariable(VariableName varname, TextSpan span, Func<VariableName, TextSpan, BoundVariable> factory)
         {
             BoundVariable value;
 
             if (!_dict.TryGetValue(varname, out value))
             {
-                _dict[varname] = value = CreateVariable(varname, span);
+                _dict[varname] = value = factory(varname, span);
             }
 
             //
             Debug.Assert(value != null);
             return value;
         }
+
+        /// <summary>
+        /// Gets local variable or create local if not yet.
+        /// </summary>
+        public BoundVariable BindLocalVariable(VariableName varname, TextSpan span) => BindVariable(varname, span, CreateLocal);
+
+        public BoundVariable BindTemporalVariable(VariableName varname) => BindVariable(varname, default(TextSpan), CreateTemporal);
+
+        public BoundVariable BindAutoGlobalVariable(VariableName varname) => BindVariable(varname, default(TextSpan), CreateAutoGlobal);
 
         #endregion
     }

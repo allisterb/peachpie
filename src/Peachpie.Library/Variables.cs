@@ -493,15 +493,16 @@ namespace Pchp.Library
         /// method) is also verified.</param>
         /// <returns><B>true</B> if <paramref name="variable"/> denotes a function, <B>false</B>
         /// otherwise.</returns>
-        public static bool is_callable(PhpValue variable, bool syntaxOnly = false)
+        public static bool is_callable(IPhpCallable variable, bool syntaxOnly = false)
         {
-            return PhpVariable.IsValidCallback(variable.AsCallable());  // TODO: check syntaxOnly || can be bound
+            return PhpVariable.IsValidCallback(variable);  // TODO: check syntaxOnly || can be bound
         }
 
         /// <summary>
         /// Verifies that the contents of a variable can be called as a function.
         /// </summary>
         /// <param name="ctx">Current runtime context.</param>
+        /// <param name="callerCtx">Type of the current calling context.</param>
         /// <param name="variable">The variable.</param>
         /// <param name="syntaxOnly">If <B>true</B>, it is only checked that has <pararef name="variable"/>
         /// a valid structure to be used as a callback. if <B>false</B>, the existence of the function (or
@@ -510,9 +511,9 @@ namespace Pchp.Library
         /// <c>SomeClass::SomeMethod</c>).</param>
         /// <returns><B>true</B> if <paramref name="variable"/> denotes a function, <B>false</B>
         /// otherwise.</returns>
-        public static bool is_callable(Context ctx /*, caller*/, PhpValue variable, bool syntaxOnly, out string callableName)
+        public static bool is_callable(Context ctx, [ImportCallerClass] RuntimeTypeHandle callerCtx, PhpValue variable, bool syntaxOnly, out string callableName)
         {
-            var callback = variable.AsCallable();
+            var callback = variable.AsCallable(callerCtx);
             if (PhpVariable.IsValidCallback(callback))
             {
                 callableName = callback.ToString();
@@ -723,6 +724,18 @@ namespace Pchp.Library
             //
             return extracted_count;
         }
+
+        #endregion
+
+        #region get_defined_vars
+
+        /// <summary>
+        /// This function returns a multidimensional array containing a list of all defined variables,
+        /// be them environment, server or user-defined variables, within the scope that get_defined_vars() is called.
+        /// </summary>
+        /// <param name="locals">The table of defined variables.</param>
+        /// <returns></returns>
+        public static PhpArray get_defined_vars([ImportLocals]PhpArray locals) => locals.DeepCopy();
 
         #endregion
 
@@ -1132,10 +1145,34 @@ namespace Pchp.Library
             {
                 if (Enter(obj))
                 {
-                    throw new NotImplementedException();
+                    var flds = TypeMembersUtils.EnumerateInstanceFieldsForDump(obj).ToList();
 
-                    ////
-                    //Leave(obj);
+                    // Template: object(NAME)#ID (COUNT) {
+                    _output.Append($"object({obj.GetPhpTypeInfo().Name})#{unchecked((uint)obj.GetHashCode())} ({flds.Count}) {{");
+                    _indent++;
+                    
+                    // object members
+                    foreach (var fld in flds)
+                    {
+                        // [key]=>
+                        // value
+
+                        NewLine();
+                        OutputIndent();
+                        _output.Append("[" + fld.Key + "]=>");
+                        NewLine();
+                        OutputIndent();
+                        Accept(fld.Value);
+                    }
+
+                    // }
+                    _indent--;
+                    NewLine();
+                    OutputIndent();
+                    _output.Append("}");
+
+                    //
+                    Leave(obj);
                 }
                 else
                 {

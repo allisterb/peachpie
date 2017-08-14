@@ -28,6 +28,12 @@ namespace Pchp.CodeAnalysis.Symbols
         public const string LocalsName = "<locals>";
 
         /// <summary>
+        /// Name of special locals parameter used for temporary variables used by compiler.
+        /// Is of type <c>PhpArray</c>.
+        /// </summary>
+        public const string TemporaryLocalsName = "<tmpLocals>";
+
+        /// <summary>
         /// Synthesized params parameter.
         /// </summary>
         public const string ParamsName = "<arguments>";
@@ -41,7 +47,12 @@ namespace Pchp.CodeAnalysis.Symbols
         /// <summary>
         /// Name of special <c>this</c> parameter.
         /// </summary>
-        public static string ThisName => VariableName.ThisVariableName.Value;
+        public const string ThisName = "this";
+
+        /// <summary>
+        /// Name of special <c>self</c> parameter.
+        /// </summary>
+        public const string SelfName = "<self>";
 
         readonly MethodSymbol _symbol;
         readonly int _index;

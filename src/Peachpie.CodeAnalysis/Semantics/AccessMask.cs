@@ -1,6 +1,6 @@
 ﻿using System;
 
-namespace Pchp.Core.Dynamic
+namespace Pchp.CodeAnalysis.Semantics
 {
     [Flags]
     public enum AccessMask
@@ -9,7 +9,6 @@ namespace Pchp.Core.Dynamic
         /// Serves for case when Expression is body of a ExpressionStmt.
         /// It is useless to push its value on the stack in that case.
         /// </summary>
-        /// <remarks>Values must match the ones in <c>CodeAnalysis</c>, AccessMask.</remarks>
         None = 0,
 
         /// <summary>
@@ -63,12 +62,17 @@ namespace Pchp.Core.Dynamic
         /// </summary>
         Unset = 256,
 
+        /// <summary>
+        /// The variable will be checked whether it is set.
+        /// </summary>
+        Isset = 512 | ReadQuiet | Read,
+
         // NOTE: WriteAndReadRef has to be constructed by semantic binder as bound expression with Write and another bound expression with ReadRef
         // NOTE: ReadAndWriteAndReadRef has to be constructed by semantic binder as bound expression with Read|Write and another bound expression with ReadRef
 
         //
         ReadMask = EnsureObject | EnsureArray | ReadRef | ReadCopy | ReadQuiet,
-        WriteMask = Write | WriteRef| Unset,
+        WriteMask = Write | WriteRef | Unset,
     }
 
     internal static class AccessMaskExtensions
@@ -82,6 +86,6 @@ namespace Pchp.Core.Dynamic
         public static bool WriteAlias(this AccessMask flags) => (flags & AccessMask.WriteRef) == AccessMask.WriteRef;
         public static bool Write(this AccessMask flags) => (flags & AccessMask.Write) != 0;
         public static bool Unset(this AccessMask flags) => (flags & AccessMask.Unset) == AccessMask.Unset;
-        public static bool Isset(this AccessMask flags) => Quiet(flags) && Read(flags);
+        public static bool Isset(this AccessMask flags) => (flags & AccessMask.Isset) == AccessMask.Isset;
     }
 }

@@ -89,6 +89,11 @@ namespace Pchp.CodeAnalysis.Symbols
         public const string PhpExtensionAttributeFullName = "Pchp.Core.PhpExtensionAttribute";
 
         /// <summary>
+        /// Name of attribute class representing target PHP language specification.
+        /// </summary>
+        public const string TargetPhpLanguageAttributeFullName = "Pchp.Core.TargetPhpLanguageAttribute";
+
+        /// <summary>
         /// Name of attribute class annotating trait declaration.
         /// </summary>
         public const string PhpTraitAttributeName = "PhpTraitAttribute";
@@ -160,7 +165,7 @@ namespace Pchp.CodeAnalysis.Symbols
             GetClassConstBinder = Create("Dynamic.GetClassConstBinder");
             GetFieldBinder = Create("Dynamic.GetFieldBinder");
             SetFieldBinder = Create("Dynamic.SetFieldBinder");
-            AccessMask = Create("Dynamic.AccessMask");
+            AccessMask = CreateFromFullName("Pchp.CodeAnalysis.Semantics.AccessMask");
 
             PhpTypeInfoExtension = Create("Reflection.PhpTypeInfoExtension");
             PhpTypeInfo = Create("Reflection.PhpTypeInfo");

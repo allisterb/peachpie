@@ -307,7 +307,7 @@ namespace Peachpie.Web
             array["HTTP_ACCEPT_ENCODING"] = (PhpValue)request.Headers["Accept-Encoding"].ToString();
             array["HTTP_ACCEPT_LANGUAGE"] = (PhpValue)request.Headers["Accept-Language"].ToString();
             array["HTTP_REFERER"] = (PhpValue)request.Headers["Referer"].ToString();
-            //array["REQUEST_URI"] = (PhpValue)request.RawUrl;
+            array["REQUEST_URI"] = (PhpValue)_httpctx.Features.Get<IHttpRequestFeature>()?.RawTarget;
             array["REQUEST_TIME_FLOAT"] = (PhpValue)DateTimeUtils.UtcToUnixTimeStampFloat(DateTime.UtcNow);
             array["REQUEST_TIME"] = (PhpValue)DateTimeUtils.UtcToUnixTimeStamp(DateTime.UtcNow);
             array["HTTPS"] = PhpValue.Create(request.IsHttps);

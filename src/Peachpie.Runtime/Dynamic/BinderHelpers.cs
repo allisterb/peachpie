@@ -9,6 +9,7 @@ using System.Reflection;
 using System.Reflection.Emit;
 using System.Text;
 using System.Threading.Tasks;
+using Pchp.CodeAnalysis.Semantics;
 
 namespace Pchp.Core.Dynamic
 {
@@ -80,7 +81,7 @@ namespace Pchp.Core.Dynamic
 
             if (target_value == null)
             {
-                restrictions =  restrictions.Merge(BindingRestrictions.GetInstanceRestriction(target.Expression, Expression.Constant(null)));
+                restrictions = restrictions.Merge(BindingRestrictions.GetInstanceRestriction(target.Expression, Expression.Constant(null)));
                 return;
             }
 
@@ -558,10 +559,12 @@ namespace Pchp.Core.Dynamic
 
                     var __isset = BindMagicMethod(type, classCtx, target, ctx, TypeMethods.MagicMethods.__isset, field, null);
 
-                    // Template: TryGetField(result) ? result : (__isset(key) ?? null)
-                    result = Expression.Condition(trygetfield,
-                        resultvar,
-                        InvokeHandler(ctx, target, field, __isset, access));
+                    // Template: (TryGetField(result) || (bool)__isset(key)) ? true : void
+                    result = Expression.Condition(Expression.OrElse(
+                            trygetfield,
+                            ConvertExpression.BindToBool(InvokeHandler(ctx, target, field, __isset, access))),
+                        Expression.Property(null, Cache.Properties.PhpValue_True),
+                        Expression.Field(null, Cache.Properties.PhpValue_Void));
                 }
                 else
                 {
@@ -625,18 +628,20 @@ namespace Pchp.Core.Dynamic
                  * }
                  */
 
-                int subkey = access.Write() ? 1 : access.Unset() ? 2 : access.Isset() ? 3 : 4;  // recursion prevention scope
+                // recursion prevention key ~ do not invoke getter twice for the same field
+                int subkey1 = access.Write() ? 1 : access.Unset() ? 2 : access.Isset() ? 3 : 4;
+                int subkey = field.GetHashCode() ^ (1 << subkey1);
 
                 // Template: RecursionCheckToken token;
                 var tokenvar = Expression.Variable(typeof(Context.RecursionCheckToken), "token");
 
-                // Template: token = new RecursionCheckToken(_ctx, (object)target, (int)access))
+                // Template: token = new RecursionCheckToken(_ctx, (object)target, (int)subkey))
                 var tokenassign = Expression.Assign(tokenvar, Expression.New(Cache.RecursionCheckToken.ctor_ctx_object_int,
                     ctx, Expression.Convert(target, Cache.Types.Object[0]), Expression.Constant(subkey)));
 
                 //
                 return Expression.Block(resultType,
-                    new[] { tokenvar},
+                    new[] { tokenvar },
                     Expression.TryFinally(
                         Expression.Condition(Expression.Property(tokenassign, Cache.RecursionCheckToken.IsInRecursion),
                             @default,

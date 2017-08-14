@@ -46,6 +46,11 @@ namespace Pchp.Core.Reflection
         protected readonly string _name;
 
         /// <summary>
+        /// Gets the relative path to the file where the type is declared. Null, if the type is from core, eval etc.
+        /// </summary>
+        public string RelativePath { get; }
+
+        /// <summary>
         /// CLR type declaration.
         /// </summary>
         public TypeInfo Type => _type;
@@ -124,7 +129,7 @@ namespace Pchp.Core.Reflection
                 if ((_flags & Flags.BaseTypePopulated) == 0)
                 {
                     var binfo = _type.BaseType;
-                    _lazyBaseType = (binfo != null && binfo != typeof(object)) ? binfo.GetPhpTypeInfo() : null;
+                    _lazyBaseType = (binfo != null && !binfo.IsHiddenType()) ? binfo.GetPhpTypeInfo() : null;
                     _flags |= Flags.BaseTypePopulated;
                 }
                 return _lazyBaseType;
@@ -216,7 +221,10 @@ namespace Pchp.Core.Reflection
         {
             Debug.Assert(t != null);
             _type = t.GetTypeInfo();
-            _name = ResolvePhpTypeName(_type);
+
+            var attr = _type.GetCustomAttribute<PhpTypeAttribute>(false);
+            RelativePath = ResolveRelativePath(attr);
+            _name = ResolvePhpTypeName(_type, attr);
 
             // remove suffixed indexes (after a special metadata character)
             var idx = _name.IndexOfAny(_metadataSeparators);
@@ -226,12 +234,13 @@ namespace Pchp.Core.Reflection
             }
         }
 
+        private static string ResolveRelativePath(PhpTypeAttribute attr) => attr?.FileName;
+
         /// <summary>
         /// Resolves PHP-like type name.
         /// </summary>
-        static string ResolvePhpTypeName(TypeInfo tinfo)
+        static string ResolvePhpTypeName(TypeInfo tinfo, PhpTypeAttribute attr)
         {
-            var attr = tinfo.GetCustomAttribute<PhpTypeAttribute>(false);
             var explicitName = attr?.ExplicitTypeName;
             return (explicitName == null)
                 ? tinfo.FullName            // full PHP type name instead of CLR type name
@@ -405,7 +414,7 @@ namespace Pchp.Core.Reflection
     /// <param name="ctx">Current runtime context. Cannot be <c>null</c>.</param>
     /// <param name="arguments">List of arguments to be passed to called constructor.</param>
     /// <returns>Object instance.</returns>
-    public delegate object TObjectCreator(Context ctx, PhpValue[] arguments);
+    public delegate object TObjectCreator(Context ctx, params PhpValue[] arguments);
 
     #endregion
 

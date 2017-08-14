@@ -5,11 +5,22 @@ using System.Linq;
 using System.Reflection;
 using System.Text;
 using System.Threading.Tasks;
+using Pchp.Core.Dynamic;
 
 namespace Pchp.Core.Reflection
 {
-    internal static class ReflectionUtils
+    public static class ReflectionUtils
     {
+        /// <summary>
+        /// Well-known name of the PHP constructor.
+        /// </summary>
+        public const string PhpConstructorName = "__construct";
+
+        /// <summary>
+        /// Well-known name of the PHP destructor.
+        /// </summary>
+        public const string PhpDestructorName = "__destruct";
+
         readonly static char[] _disallowedNameChars = new char[] { '`', '<', '>', '.', '\'', '"', '#', '!' };
 
         /// <summary>
@@ -61,5 +72,33 @@ namespace Pchp.Core.Reflection
             var t = tinfo.AsType();
             return !tinfo.IsValueType && t != typeof(PhpArray) && t != typeof(string) && t != typeof(PhpString);
         }
+
+        readonly static HashSet<Type> s_hiddenTypes = new HashSet<Type>()
+        {
+            typeof(object),
+            typeof(IPhpCallable),
+            typeof(PhpResource),
+            typeof(System.Exception),
+            typeof(System.Dynamic.IDynamicMetaObjectProvider),
+            typeof(IPhpConvertible),
+            typeof(IPhpComparable),
+        };
+
+        /// <summary>
+        /// Determines if given type is not visible to PHP runtime.
+        /// We implement these types implicitly in compile time, so we should ignore them at proper places.
+        /// </summary>
+        public static bool IsHiddenType(this Type t) => s_hiddenTypes.Contains(t);
+
+        /// <summary>
+        /// Determines the parameter is considered as implicitly passed by runtime.
+        /// </summary>
+        public static bool IsImplicitParameter(ParameterInfo p) => BinderHelpers.IsImplicitParameter(p);
+
+        /// <summary>
+        /// Gets count of implicit parameters.
+        /// Such parameters are passed by runtime automatically and not read from given arguments.
+        /// </summary>
+        public static int ImplicitParametersCount(ParameterInfo[] ps) => ps.TakeWhile(IsImplicitParameter).Count();
     }
 }

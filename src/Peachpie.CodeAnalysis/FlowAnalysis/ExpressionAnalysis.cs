@@ -38,79 +38,12 @@ namespace Pchp.CodeAnalysis.FlowAnalysis
         #region Helpers
 
         /// <summary>
-        /// Gets value indicating the given type represents a double and nothing else.
-        /// </summary>
-        bool IsDoubleOnly(TypeRefMask tmask)
-        {
-            return tmask.IsSingleType && this.TypeCtx.IsDouble(tmask);
-        }
-
-        /// <summary>
-        /// Gets value indicating the given type represents a double and nothing else.
-        /// </summary>
-        bool IsDoubleOnly(BoundExpression x) => IsDoubleOnly(x.TypeRefMask);
-
-        /// <summary>
-        /// Gets value indicating the given type represents a long and nothing else.
-        /// </summary>
-        bool IsLongOnly(TypeRefMask tmask)
-        {
-            return tmask.IsSingleType && this.TypeCtx.IsLong(tmask);
-        }
-
-        /// <summary>
-        /// Gets value indicating the given type represents a long and nothing else.
-        /// </summary>
-        bool IsLongOnly(BoundExpression x) => IsLongOnly(x.TypeRefMask);
-
-        /// <summary>
-        /// Gets value indicating the given type is long or double or both but nothing else.
-        /// </summary>
-        /// <param name="tmask"></param>
-        /// <returns></returns>
-        bool IsNumberOnly(TypeRefMask tmask)
-        {
-            if (TypeCtx.IsLong(tmask) || TypeCtx.IsDouble(tmask))
-            {
-                if (tmask.IsSingleType)
-                {
-                    return true;
-                }
-
-                return !tmask.IsAnyType && TypeCtx.GetTypes(tmask).All(TypeHelpers.IsNumber);
-            }
-
-            return false;
-        }
-
-        /// <summary>
-        /// Gets value indicating the given type represents only class types.
-        /// </summary>
-        bool IsClassOnly(TypeRefMask tmask)
-        {
-            return !tmask.IsVoid && !tmask.IsAnyType && TypeCtx.GetTypes(tmask).All(x => x.IsObject);
-        }
-
-        /// <summary>
-        /// Gets value indicating the given type represents only array types.
-        /// </summary>
-        bool IsArrayOnly(TypeRefMask tmask)
-        {
-            return !tmask.IsVoid && !tmask.IsAnyType && TypeCtx.GetTypes(tmask).All(x => x.IsArray);
-        }
-
-        /// <summary>
-        /// Gets value indicating the given type is long or double or both but nothing else.
-        /// </summary>
-        bool IsNumberOnly(BoundExpression x) => IsNumberOnly(x.TypeRefMask);
-
-        /// <summary>
         /// Determines if given expression represents a variable which value is less than <c>Int64.Max</c> in current state.
         /// </summary>
         bool IsLTInt64Max(BoundReferenceExpression r)
         {
             var varname = AsVariableName(r);
-            return varname != null && State.IsLTInt64Max(State.GetLocalHandle(varname));
+            return varname.IsValid() && State.IsLTInt64Max(State.GetLocalHandle(varname));
         }
 
         /// <summary>
@@ -119,7 +52,7 @@ namespace Pchp.CodeAnalysis.FlowAnalysis
         void LTInt64Max(BoundReferenceExpression r, bool lt)
         {
             var varname = AsVariableName(r);
-            if (varname != null)
+            if (varname.IsValid())
             {
                 State.LTInt64Max(State.GetLocalHandle(varname), lt);
             }
@@ -128,14 +61,15 @@ namespace Pchp.CodeAnalysis.FlowAnalysis
         /// <summary>
         /// In case of a local variable or parameter, gets its name.
         /// </summary>
-        string AsVariableName(BoundReferenceExpression r)
+        VariableName AsVariableName(BoundReferenceExpression r)
         {
             var vr = r as BoundVariableRef;
             if (vr != null && (vr.Variable is BoundLocal || vr.Variable is BoundParameter))
             {
-                return vr.Variable.Name;
+                return new VariableName(vr.Variable.Name);
             }
-            return null;
+
+            return default(VariableName);
         }
 
         bool IsLongConstant(BoundExpression expr, long value)
@@ -208,7 +142,7 @@ namespace Pchp.CodeAnalysis.FlowAnalysis
         public override void VisitStaticStatement(BoundStaticVariableStatement x)
         {
             var v = x.Declaration;
-            var local = State.GetLocalHandle(v.Variable.Name);
+            var local = State.GetLocalHandle(new VariableName(v.Variable.Name));
 
             State.SetVarKind(local, VariableKind.StaticVariable);
 
@@ -233,9 +167,7 @@ namespace Pchp.CodeAnalysis.FlowAnalysis
 
         public override void VisitGlobalStatement(BoundGlobalVariableStatement x)
         {
-            var local = State.GetLocalHandle(x.Variable.Name);
-            State.SetVarKind(local, VariableKind.GlobalVariable);
-            State.SetLocalType(local, TypeRefMask.AnyType.WithRefFlag);
+            base.VisitGlobalStatement(x);   // Accept(x.Variable)
         }
 
         #endregion
@@ -256,15 +188,18 @@ namespace Pchp.CodeAnalysis.FlowAnalysis
             Debug.Assert(x.Target.Access.IsWrite);
             Debug.Assert(x.Value.Access.IsRead);
 
+            //
             Accept(x.Value);
 
             // keep WriteRef flag
-            var targetaccess = BoundAccess.Write;
+            var targetaccess = BoundAccess.None.WithWrite(x.Value.TypeRefMask);
             if (x.Target.Access.IsWriteRef)
+            {
                 targetaccess = targetaccess.WithWriteRef(0);
+            }
 
             // new target access with resolved target type
-            Visit(x.Target, targetaccess.WithWrite(x.Value.TypeRefMask));
+            Visit(x.Target, targetaccess);
 
             //
             x.TypeRefMask = x.Value.TypeRefMask;
@@ -311,117 +246,169 @@ namespace Pchp.CodeAnalysis.FlowAnalysis
             x.TypeRefMask = tmp.TypeRefMask;
         }
 
+        protected virtual void VisitSuperglobalVariableRef(BoundVariableRef x)
+        {
+            Debug.Assert(x.Name.IsDirect);
+            Debug.Assert(x.Name.NameValue.IsAutoGlobal);
+
+            // remember the initial state of variable at this point
+            x.BeforeTypeRef = TypeRefMask.AnyType;
+
+            // bind variable place
+            x.Variable = Routine.LocalsTable.BindAutoGlobalVariable(x.Name.NameValue);
+
+            // update state
+            if (x.Access.IsRead)
+            {
+                var vartype = TypeCtx.GetArrayTypeMask();
+
+                if (x.Access.IsReadRef)
+                {
+                    vartype = vartype.WithRefFlag;
+                }
+
+                if (x.Access.EnsureObject)
+                {
+                    // TODO: report ERR
+                }
+
+                // resulting type of the expression
+                x.TypeRefMask = vartype;
+            }
+
+            if (x.Access.IsWrite)
+            {
+                x.TypeRefMask = x.Access.WriteMask;
+            }
+
+            if (x.Access.IsUnset)
+            {
+                x.TypeRefMask = TypeCtx.GetNullTypeMask();
+            }
+        }
+
+        protected virtual void VisitLocalVariableRef(BoundVariableRef x, VariableHandle local)
+        {
+            var previoustype = State.GetLocalType(local);       // type of the variable in the previous state
+
+            // remember the initial state of variable at this point
+            x.BeforeTypeRef = previoustype;
+
+            // bind variable place
+            if (x.Variable == null)
+            {
+                x.Variable = (x is BoundTemporalVariableRef)     // synthesized variable constructed by semantic binder
+                    ? Routine.LocalsTable.BindTemporalVariable(local.Name)
+                    : Routine.LocalsTable.BindLocalVariable(local.Name, x.PhpSyntax.Span.ToTextSpan());
+            }
+
+            //
+            State.VisitLocal(local);
+
+            // update state
+            if (x.Access.IsRead)
+            {
+                var vartype = previoustype;
+
+                if (vartype.IsVoid || Routine.IsGlobalScope)
+                {
+                    // in global code or in case of undefined variable,
+                    // assume the type is mixed (unspecified).
+                    // In global code, the type of variable cannot be determined by type analysis, it can change between every two operations (this may be improved by better flow analysis).
+                    vartype = TypeRefMask.AnyType;
+                }
+
+                if (x.Access.IsEnsure)
+                {
+                    if (x.Access.IsReadRef)
+                    {
+                        State.MarkLocalByRef(local);
+                        vartype.IsRef = true;
+                    }
+                    if (x.Access.EnsureObject && !TypeCtx.IsObject(vartype))
+                    {
+                        vartype |= TypeCtx.GetSystemObjectTypeMask();
+                    }
+                    if (x.Access.EnsureArray)
+                    {
+                        vartype |= TypeCtx.GetArrayTypeMask();
+                    }
+
+                    State.SetLocalType(local, vartype);
+                }
+                else
+                {
+                    // reset 'MaybeUninitialized' flag:
+                    x.MaybeUninitialized = false;
+
+                    if (!State.IsLocalSet(local))
+                    {
+                        // do not flag as uninitialized if variable:
+                        // - may be a reference
+                        // - is in a global scope
+                        if (!vartype.IsRef && !Routine.IsGlobalScope)
+                        {
+                            x.MaybeUninitialized = true;
+                        }
+
+                        // variable maybe null if it can be uninitialized
+                        vartype |= TypeCtx.GetNullTypeMask();
+                    }
+                }
+
+                // resulting type of the expression
+                x.TypeRefMask = vartype;
+            }
+
+            if (x.Access.IsWrite)
+            {
+                var vartype = x.Access.WriteMask;
+
+                if (x.Access.IsWriteRef || previoustype.IsRef)    // keep the ref flag of local
+                {
+                    vartype.IsRef = true;
+                    State.MarkLocalByRef(local);
+                }
+                else if (vartype.IsRef)
+                {
+                    // // we can't be sure about the type
+                    vartype = TypeRefMask.AnyType; // anything, not ref
+                                                   //vartype.IsRef = false;  // the variable won't be a reference from this point
+                }
+
+                //
+                State.SetLocalType(local, vartype);
+                State.LTInt64Max(local, false);
+                x.TypeRefMask = vartype;
+            }
+
+            if (x.Access.IsUnset)
+            {
+                x.TypeRefMask = TypeCtx.GetNullTypeMask();
+                State.SetLocalType(local, x.TypeRefMask);
+                State.LTInt64Max(local, false);
+                State.SetVarUninitialized(local);
+            }
+        }
+
         public override void VisitVariableRef(BoundVariableRef x)
         {
             if (x.Name.IsDirect)
             {
                 // direct variable access:
-                var local = State.GetLocalHandle(x.Name.NameValue.Value);
-                var previoustype = State.GetLocalType(local);    // type of the variable in the previous state
-
-                // bind variable place either with a PHPSyntax span (from source) or with an emepty one (for non-source variables)
-                Debug.Assert(x is BoundSynthesizedVariableRef || x.PhpSyntax != null);
-                var varSpan = (x.PhpSyntax != null) ? x.PhpSyntax.Span.ToTextSpan() : default(Microsoft.CodeAnalysis.Text.TextSpan);
-                x.Variable = Routine.LocalsTable.BindVariable(local.Name, varSpan);
-
-                //
-                State.VisitLocal(local);
-
-                // update state
-                if (x.Access.IsRead)
+                if (x.Name.NameValue.IsAutoGlobal)
                 {
-                    var vartype = previoustype;
-
-                    if (vartype.IsVoid || Routine.IsGlobalScope)
-                    {
-                        // in global code or in case of undefined variable,
-                        // assume the type is mixed (unspecified).
-                        // In global code, the type of variable cannot be determined by type analysis, it can change between every two operations (this may be improved by better flow analysis).
-                        vartype = TypeRefMask.AnyType;
-                    }
-
-                    if (x.Access.IsEnsure)
-                    {
-                        if (x.Access.IsReadRef)
-                        {
-                            State.MarkLocalByRef(local);
-                            vartype.IsRef = true;
-                        }
-                        if (x.Access.EnsureObject && !TypeCtx.IsObject(vartype))
-                        {
-                            vartype |= TypeCtx.GetSystemObjectTypeMask();
-                        }
-                        if (x.Access.EnsureArray)
-                        {
-                            vartype |= TypeCtx.GetArrayTypeMask();
-                        }
-
-                        State.SetLocalType(local, vartype);
-                    }
-                    else
-                    {
-                        // reset 'MaybeUninitialized' flag:
-                        x.MaybeUninitialized = false;
-
-                        if (!State.IsLocalSet(local))
-                        {
-                            // do not report as uninitialized if variable
-                            // - may be a reference
-                            // - is a (super)global variable
-                            // - is in a global scope
-                            if (x.Variable.VariableKind != VariableKind.GlobalVariable && !vartype.IsRef && !Routine.IsGlobalScope)
-                            {
-                                x.MaybeUninitialized = true;
-                            }
-
-                            // variable maybe null if it can be uninitialized
-                            vartype |= TypeCtx.GetNullTypeMask();
-                        }
-                    }
-
-                    x.TypeRefMask = vartype;
+                    VisitSuperglobalVariableRef(x);
                 }
-
-                if (x.Access.IsWrite)
+                else
                 {
-                    x.TypeRefMask = x.Access.WriteMask;
-
-                    if (x.Access.IsWriteRef || previoustype.IsRef)    // <x> can be a referenced value
-                    {
-                        State.MarkLocalByRef(local);
-                        x.TypeRefMask = x.TypeRefMask.WithRefFlag;
-                    }
-
-                    //
-                    State.SetLocalType(local, x.TypeRefMask);
-                    State.LTInt64Max(local, false);
-                }
-
-                if (x.Access.IsUnset)
-                {
-                    x.TypeRefMask = TypeCtx.GetNullTypeMask();
-                    State.SetLocalType(local, x.TypeRefMask);
-                    State.LTInt64Max(local, false);
-                    State.SetVarUninitialized(local);
-                }
-
-                // static variable -> restart flow analysis with new possible initial state
-                if (x.Variable.VariableKind == VariableKind.StaticVariable && x.Access.MightChange)
-                {
-                    // analysis has to be started over
-                    var startBlock = Routine.ControlFlowGraph.Start;    // TODO: start from the block which declares the static local variable
-                    var startState = startBlock.FlowState;
-
-                    var oldtype = previoustype | x.TypeRefMask;
-                    if (oldtype != x.TypeRefMask)
-                    {
-                        startState.SetLocalType(local, oldtype);
-                        this.Worklist.Enqueue(startBlock);
-                    }
+                    VisitLocalVariableRef(x, State.GetLocalHandle(x.Name.NameValue));
                 }
             }
             else
             {
+                x.BeforeTypeRef = TypeRefMask.AnyType;
+
                 // indirect variable access:
                 Routine.Flags |= RoutineFlags.HasIndirectVar;
 
@@ -976,7 +963,7 @@ namespace Pchp.CodeAnalysis.FlowAnalysis
                     var vartype = TypeCtx.GetTypeMask(x.AsType.TypeRef, true);
                     if (x.Operand.TypeRefMask.IsRef) vartype = vartype.WithRefFlag; // keep IsRef flag
 
-                    State.SetLocalType(State.GetLocalHandle(vref.Name.NameValue.Value), vartype);
+                    State.SetLocalType(State.GetLocalHandle(vref.Name.NameValue), vartype);
                 }
             }
 
@@ -996,7 +983,7 @@ namespace Pchp.CodeAnalysis.FlowAnalysis
             {
                 // try to get resulting value and type of the variable
                 var localname = AsVariableName(x.VarReference);
-                if (localname != null)
+                if (localname.IsValid())
                 {
                     var handle = State.GetLocalHandle(localname);
                     Debug.Assert(handle.IsValid);
@@ -1040,7 +1027,7 @@ namespace Pchp.CodeAnalysis.FlowAnalysis
                 if (branch == ConditionBranch.ToTrue)
                 {
                     var varname = AsVariableName(TryGetExpressionChainRoot(x.VarReference) as BoundReferenceExpression);    // in case of a chained expression, we know its root will be initialized
-                    if (varname != null)
+                    if (varname.IsValid())
                     {
                         State.SetVarInitialized(State.GetLocalHandle(varname));
                     }
@@ -1120,7 +1107,7 @@ namespace Pchp.CodeAnalysis.FlowAnalysis
                             {
                                 if (refvar.Name.IsDirect)
                                 {
-                                    var local = State.GetLocalHandle(refvar.Name.NameValue.Value);
+                                    var local = State.GetLocalHandle(refvar.Name.NameValue);
                                     State.SetLocalType(local, expectedparams[i].Type);
                                     refvar.MaybeUninitialized = false;
                                     if (ep.IsAlias)
@@ -1459,7 +1446,7 @@ namespace Pchp.CodeAnalysis.FlowAnalysis
                     {
                         // TODO: visibility and resolution (model)
                         var fldname = x.FieldName.NameValue.Value;
-                        var member = resolvedtype.ResolveInstanceProperty(fldname) ?? resolvedtype.ResolveStaticField(fldname);
+                        var member = resolvedtype.ResolveInstanceProperty(fldname);
                         if (member != null && member.IsAccessible(this.TypeCtx.ContainingType))
                         {
                             Debug.Assert(member is FieldSymbol || member is PropertySymbol);
@@ -1649,7 +1636,7 @@ namespace Pchp.CodeAnalysis.FlowAnalysis
 
         public override void VisitUnset(BoundUnset x)
         {
-            x.VarReferences.ForEach(Accept);
+            base.VisitUnset(x);
         }
 
         public override void VisitList(BoundListEx x)
@@ -1741,7 +1728,7 @@ namespace Pchp.CodeAnalysis.FlowAnalysis
             // TODO: check constant name
 
             // bind to app-wide constant if possible
-            var constant = (FieldSymbol)_model.ResolveConstant(x.Name);
+            var constant = (FieldSymbol)_model.ResolveConstant(x.Name.ToString());
             if (!BindConstantValue(x, constant))
             {
                 if (constant != null && constant.IsStatic && constant.IsReadOnly)

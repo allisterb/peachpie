@@ -22,6 +22,8 @@
 - [Getting Started](https://github.com/peachpiecompiler/peachpie/wiki/Getting-Started)  
 - [Documentation](https://github.com/peachpiecompiler/peachpie/wiki)
 
+[<img align="right" src="https://dotnetfoundation.org/Themes/DotNetFoundation.Theme/Images/logo-small.png" width="100" />](https://www.dotnetfoundation.org/)
+We are now a member of the [.NET Foundation](https://www.dotnetfoundation.org/about)!
 
 ## Continuous Integration
 
@@ -29,6 +31,7 @@
 |---|---|---|
 | Travis CI | Ubuntu  | [![Build status](https://api.travis-ci.org/peachpiecompiler/peachpie.svg?branch=master)](https://travis-ci.org/peachpiecompiler/peachpie)  |
 | MyGet Build Services  | Windows  | [![peachpie MyGet Build Status](https://www.myget.org/BuildSource/Badge/peachpie?identifier=14586f8c-2600-412f-b9b0-39db8e930806)](https://www.myget.org/gallery/peachpie)    |
+| Visual Studio Team Services | Windows | ![VSTS Build Status](https://iolevel.visualstudio.com/_apis/public/build/definitions/bd7dcca1-8515-44f8-81d0-bb2acc03d949/1/badge)|
 
 ## What is Peachpie?
 Peachpie is a modern PHP compiler based on the Microsoft Roslyn compiler platform and drawing from our popular Phalanger project. It allows PHP to be executed within the .NET framework, thereby opening the door for PHP developers into the world of .NET – and vice versa.
@@ -78,6 +81,13 @@ However, please read the [Contribution Guidelines](https://github.com/peachpieco
 
 ## Providing feedback
 If you found a bug, the easiest way of providing feedback is to post it on [Gitter](https://gitter.im/iolevel/peachpie). We will enable the posting of issues on GitHub once the compiler will be in version 1.0.
+
+
+## .NET Foundation
+<a href="https://dotnetfoundation.org"><img src="https://dotnetfoundation.org/Themes/DotNetFoundation.Theme/Images/logo-small.png" width="150" alt=".NET Foundation"></a>
+  <br>
+This project is supported by the [.NET Foundation](http://www.dotnetfoundation.org).
+
 
 ## How to get in touch?
 We kindly ask you to be patient with your queries; you can follow us on [Twitter](https://twitter.com/pchpcompiler) or on [Facebook](https://www.facebook.com/pchpcompiler/). You can contact us there regarding your questions or ask the community for support on [Gitter](https://gitter.im/iolevel/peachpie), but please understand that we do not provide support at this point.

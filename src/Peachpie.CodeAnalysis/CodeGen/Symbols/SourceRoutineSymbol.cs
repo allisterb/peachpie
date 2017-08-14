@@ -73,7 +73,7 @@ namespace Pchp.CodeAnalysis.Symbols
         /// Creates ghost stubs,
         /// i.e. methods with a different signature calling this routine to comply with CLR standards.
         /// </summary>
-        internal virtual void SynthesizeGhostStubs(PEModuleBuilder module, DiagnosticBag diagnostic)
+        internal virtual void SynthesizeStubs(PEModuleBuilder module, DiagnosticBag diagnostic)
         {
             SynthesizeOverloadsWithOptionalParameters(module, diagnostic);
         }
@@ -111,50 +111,7 @@ namespace Pchp.CodeAnalysis.Symbols
         void CreateGhostOverload(PEModuleBuilder module, DiagnosticBag diagnostic, int pcount)
         {
             Debug.Assert(this.Parameters.Length > pcount);
-
-            CreateGhostOverload(module, diagnostic, this.ReturnType, this.Parameters.Take(pcount), null);
-        }
-
-        /// <summary>
-        /// Creates ghost stub that calls current method.
-        /// </summary>
-        protected void CreateGhostOverload(PEModuleBuilder module, DiagnosticBag diagnostic,
-            TypeSymbol ghostreturn, IEnumerable<ParameterSymbol> ghostparams,
-            MethodSymbol explicitOverride = null)
-        {
-            var ghost = new SynthesizedMethodSymbol(
-                this.ContainingType, this.Name, this.IsStatic, explicitOverride != null, ghostreturn, this.DeclaredAccessibility)
-            {
-                ExplicitOverride = explicitOverride,
-            };
-
-            ghost.SetParameters(ghostparams.Select(p =>
-                new SynthesizedParameterSymbol(ghost, p.Type, p.Ordinal, p.RefKind, p.Name)).ToArray());
-
-            // save method symbol to module
-            module.SynthesizedManager.AddMethod(this.ContainingType, ghost);
-
-            // generate method body
-            GenerateGhostBody(module, diagnostic, ghost);
-        }
-
-        /// <summary>
-        /// Generates ghost method body that calls <c>this</c> method.
-        /// </summary>
-        protected void GenerateGhostBody(PEModuleBuilder module, DiagnosticBag diagnostic, SynthesizedMethodSymbol ghost)
-        {
-            var body = MethodGenerator.GenerateMethodBody(module, ghost,
-                (il) =>
-                {
-                    var cg = new CodeGenerator(il, module, diagnostic, module.Compilation.Options.OptimizationLevel, false, this.ContainingType, this.GetContextPlace(), this.GetThisPlace());
-
-                    // return (T){routine}(p0, ..., pN);
-                    cg.EmitConvert(cg.EmitThisCall(this, ghost), 0, ghost.ReturnType);
-                    cg.EmitRet(ghost.ReturnType);
-                },
-                null, diagnostic, false);
-
-            module.SetMethodBody(ghost, body);
+            GhostMethodBuilder.CreateGhostOverload(this, this.ContainingType, module, diagnostic, this.ReturnType, this.Parameters.Take(pcount), null);
         }
 
         public virtual void Generate(CodeGenerator cg)
@@ -183,9 +140,12 @@ namespace Pchp.CodeAnalysis.Symbols
                 cg.Builder.EmitLocalStore(generatorsLocals);
 
                 // initialize parameters (set their _isOptimized and copy them to locals array)
-                initializeParametersForGeneratorMethod(cg, il, generatorsLocals);
+                InitializeParametersForGeneratorMethod(cg, il, generatorsLocals);
                 cg.Builder.EmitLoad(generatorsLocals);
                 cg.ReturnTemporaryLocal(generatorsLocals);
+
+                // new PhpArray for generator's synthesizedLocals
+                cg.EmitCall(ILOpCode.Newobj, cg.CoreMethods.Ctors.PhpArray);
 
                 // new GeneratorStateMachineDelegate(<genSymbol>) delegate for generator
                 cg.Builder.EmitNullConstant(); // null
@@ -193,20 +153,19 @@ namespace Pchp.CodeAnalysis.Symbols
                 cg.EmitSymbolToken(genSymbol, null);
                 cg.EmitCall(ILOpCode.Newobj, cg.CoreTypes.GeneratorStateMachineDelegate.Ctor(cg.CoreTypes.Object, cg.CoreTypes.IntPtr)); // GeneratorStateMachineDelegate(object @object, IntPtr method)
 
-
                 // create generator object via Operators factory method
-                cg.EmitCall(ILOpCode.Call, cg.CoreMethods.Operators.BuildGenerator_Context_Object_PhpArray_GeneratorStateMachineDelegate);
+                cg.EmitCall(ILOpCode.Call, cg.CoreMethods.Operators.BuildGenerator_Context_Object_PhpArray_PhpArray_GeneratorStateMachineDelegate);
 
                 // Convert to return type (Generator or PhpValue, depends on analysis)
                 cg.EmitConvert(cg.CoreTypes.Generator, 0, this.ReturnType);
                 il.EmitRet(false);
 
                 // Generate SM method. Must be generated after EmitInit of parameters (it sets their _isUnoptimized field).
-                createStateMachineNextMethod(cg, genSymbol);
+                CreateStateMachineNextMethod(cg, genSymbol);
             }
         }
 
-        private void initializeParametersForGeneratorMethod(CodeGenerator cg, Microsoft.CodeAnalysis.CodeGen.ILBuilder il, Microsoft.CodeAnalysis.CodeGen.LocalDefinition generatorsLocals)
+        private void InitializeParametersForGeneratorMethod(CodeGenerator cg, Microsoft.CodeAnalysis.CodeGen.ILBuilder il, Microsoft.CodeAnalysis.CodeGen.LocalDefinition generatorsLocals)
         {
             // Emit init of unoptimized BoundParameters using separate CodeGenerator that has locals place pointing to our generator's locals array
             using (var localsArrayCg = new CodeGenerator(
@@ -226,14 +185,14 @@ namespace Pchp.CodeAnalysis.Symbols
             }
         }
 
-        private void createStateMachineNextMethod(CodeGenerator cg, SourceGeneratorSymbol genSymbol)
+        private void CreateStateMachineNextMethod(CodeGenerator cg, SourceGeneratorSymbol genSymbol)
         {
             cg.Module.SynthesizedManager.AddMethod(ContainingType, genSymbol); // save method symbol to module
 
             // generate generator's next method body
             var genMethodBody = MethodGenerator.GenerateMethodBody(cg.Module, genSymbol, (_il) =>
             {
-                generateStateMachinesNextMethod(cg, _il, genSymbol);
+                GenerateStateMachinesNextMethod(cg, _il, genSymbol);
             }
             , null, cg.Diagnostics, cg.EmitPdbSequencePoints);
 
@@ -241,10 +200,10 @@ namespace Pchp.CodeAnalysis.Symbols
         }
 
         //Initialized a new CodeGenerator for generation of SourceGeneratorSymbol (state machine's next method)
-        private void generateStateMachinesNextMethod(CodeGenerator cg, Microsoft.CodeAnalysis.CodeGen.ILBuilder _il, SourceGeneratorSymbol genSymbol)
+        private void GenerateStateMachinesNextMethod(CodeGenerator cg, Microsoft.CodeAnalysis.CodeGen.ILBuilder _il, SourceGeneratorSymbol genSymbol)
         {
-            // TODO: Pass SourceGeneratorSymbol to CG instead of this to get correct ThisPlace, ReturnType etc. resolution & binding out of the box without GN_SGS hacks
-            // ..can't do that easily beacuse CodeGenerator accepts only SourceRoutineSymbol and SGS derives from SynthesizedMethodSymbol (shim over too general MethodSymbol) 
+            // TODO: get correct ThisPlace, ReturnType etc. resolution & binding out of the box without GN_SGS hacks
+            // using SourceGeneratorSymbol
 
             //Refactor parameters references to proper fields
             using (var stateMachineNextCg = new CodeGenerator(
@@ -252,12 +211,16 @@ namespace Pchp.CodeAnalysis.Symbols
                 cg.DeclaringCompilation.Options.OptimizationLevel,
                 cg.EmitPdbSequencePoints,
                 this.ContainingType,
-                contextPlace: new ParamPlace(genSymbol.Parameters[0]),
-                thisPlace: new ParamPlace(genSymbol.Parameters[1]),
+                contextPlace: new ParamPlace(genSymbol.ContextParameter),
+                thisPlace: new ParamPlace(genSymbol.ThisParameter),
                 routine: this,
-                locals: new ParamPlace(genSymbol.Parameters[2]),
-                localsInitialized: true
-                    ))
+                locals: new ParamPlace(genSymbol.LocalsParameter),
+                localsInitialized: true,
+                tempLocals: new ParamPlace(genSymbol.TmpLocalsParameter)
+                    )
+            {
+                GeneratorStateMachineMethod = genSymbol,    // Pass SourceGeneratorSymbol to CG for additional yield and StartBlock emit 
+            })
             {
                 stateMachineNextCg.GenerateScope(this.ControlFlowGraph.Start, int.MaxValue);
             }
@@ -268,13 +231,13 @@ namespace Pchp.CodeAnalysis.Symbols
     {
         public override IPlace PhpThisVariablePlace => base.PhpThisVariablePlace;
 
-        internal override void SynthesizeGhostStubs(PEModuleBuilder module, DiagnosticBag diagnostic)
+        internal override void SynthesizeStubs(PEModuleBuilder module, DiagnosticBag diagnostic)
         {
             // <Main>'0
             this.SynthesizeMainMethodWrapper(module, diagnostic);
 
             //
-            base.SynthesizeGhostStubs(module, diagnostic);
+            base.SynthesizeStubs(module, diagnostic);
         }
 
         /// <summary>
@@ -326,43 +289,16 @@ namespace Pchp.CodeAnalysis.Symbols
             return base.GetContextPlace();
         }
 
-        internal override void SynthesizeGhostStubs(PEModuleBuilder module, DiagnosticBag diagnostic)
+        internal override void SynthesizeStubs(PEModuleBuilder module, DiagnosticBag diagnostic)
         {
-            base.SynthesizeGhostStubs(module, diagnostic);
-
-            // not matching override has to have a ghost stub
-            var overriden = (MethodSymbol)this.OverriddenMethod; // OverrideHelper.ResolveOverride(this);
-            if (overriden != null && !this.SignaturesMatch(overriden))
-            {
-                /* 
-                 * class A {
-                 *    TReturn1 foo(A, B);
-                 * }
-                 * class B : A {
-                 *    TReturn2 foo(A2, B2);
-                 *    
-                 *    // SYNTHESIZED GHOST:
-                 *    override TReturn foo(A, B){ return (TReturn)foo((A2)A, (B2)B);
-                 * }
-                 */
-
-                if (string.Equals(overriden.RoutineName, "ToString", StringComparison.OrdinalIgnoreCase) &&
-                    this.ContainingType.GetMembers(Devsense.PHP.Syntax.Name.SpecialMethodNames.Tostring.Value, true).OfType<MethodSymbol>().Any())
-                {
-                    /* Exception: __toString() already implements System.Object.ToString(),
-                     * do not create ghost override for ToString then.
-                     */
-                    return;
-                }
-
-                CreateGhostOverload(module, diagnostic, overriden.ReturnType, overriden.Parameters, overriden);
-            }
-
             // empty body for static abstract
             if (this.ControlFlowGraph == null && this.IsStatic)
             {
                 SynthesizeEmptyBody(module, diagnostic);
             }
+
+            //
+            base.SynthesizeStubs(module, diagnostic);
         }
 
         void SynthesizeEmptyBody(PEModuleBuilder module, DiagnosticBag diagnostic)

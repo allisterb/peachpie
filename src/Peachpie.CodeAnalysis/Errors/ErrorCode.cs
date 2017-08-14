@@ -56,6 +56,7 @@ namespace Pchp.CodeAnalysis.Errors
         ERR_MetadataNameTooLong,
         ERR_MetadataReferencesNotSupported,
         ERR_NoSourceFile,
+        ERR_StartupObjectNotFound,
         ERR_OpenResponseFile,
         ERR_OutputWriteFailed,
         ERR_PdbWritingFailed,
@@ -70,6 +71,10 @@ namespace Pchp.CodeAnalysis.Errors
         ERR_CircularBase,
         ERR_TypeNameCannotBeResolved,
         ERR_PositionalArgAfterUnpacking,    // Cannot use positional argument after argument unpacking
+        /// <summary>Call to a member function {0} on {1}</summary>
+        ERR_MethodCalledOnNonObject,
+        /// <summary>Value of type {0} cannot be passed by reference.</summary>
+        ERR_ValueOfTypeCannotBeAliased,
 
         //
         // Warnings
@@ -89,6 +94,7 @@ namespace Pchp.CodeAnalysis.Errors
         WRN_AmbiguousDeclaration,
         WRN_UnreachableCode,
         WRN_NotYetImplementedIgnored,
+        WRN_NoSourceFiles,
 
         //
         // Visible information

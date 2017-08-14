@@ -63,17 +63,8 @@ namespace Pchp.Library.Reflection
 
         public void __construct(Context ctx, PhpValue @class, string name)
         {
-            var tinfo = ReflectionClass.ResolvePhpTypeInfo(ctx, @class);
-            if (tinfo != null)
-            {
-                _tinfo = tinfo;
-                _routine = tinfo.RuntimeMethods[name];
-            }
-
-            if (_routine == null)
-            {
-                throw new ArgumentException(); // TODO: ReflectionException();
-            }
+            _tinfo = ReflectionUtils.ResolvePhpTypeInfo(ctx, @class);
+            _routine = _tinfo.RuntimeMethods[name] ?? throw new ReflectionException(string.Format(Resources.Resources.method_does_not_exist, _tinfo.Name, name));
         }
 
         #endregion
@@ -109,8 +100,8 @@ namespace Pchp.Library.Reflection
         public PhpValue invoke(Context ctx, object @object, params PhpValue[] args) => _routine.Invoke(ctx, @object, args);
         public PhpValue invokeArgs(Context ctx, object @object, PhpArray args) => _routine.Invoke(ctx, @object, args.GetValues());
         public bool isAbstract() => _routine.Methods.Any(m => m.IsAbstract);
-        public bool isConstructor() { throw new NotImplementedException(); }
-        public bool isDestructor() { throw new NotImplementedException(); }
+        public bool isConstructor() => name.EqualsOrdinalIgnoreCase(Core.Reflection.ReflectionUtils.PhpConstructorName);
+        public bool isDestructor() => name.EqualsOrdinalIgnoreCase(Core.Reflection.ReflectionUtils.PhpDestructorName);
         public bool isFinal() => _routine.Methods.All(m => m.IsFinal);
         public bool isPrivate() { throw new NotImplementedException(); }
         public bool isProtected() { throw new NotImplementedException(); }

@@ -66,7 +66,7 @@ namespace Pchp.CodeAnalysis.Semantics
                 // g._returnValue = <returned expression>
                 if (this.Returned != null)
                 {
-                    cg.Builder.EmitLoadArgumentOpcode(3);
+                    cg.EmitGeneratorInstance();
                     var t = cg.Emit(this.Returned);
                     cg.EmitConvertToPhpValue(t, 0);
                     cg.EmitCall(ILOpCode.Call, cg.CoreMethods.Operators.SetGeneratorReturnedValue_Generator_PhpValue);
@@ -74,8 +74,8 @@ namespace Pchp.CodeAnalysis.Semantics
 
 
                 // g._state = -2 (closed): got to the end of the generator method
-                cg.Builder.EmitLoadArgumentOpcode(3);
-                cg.EmitLoadConstant(-2, cg.CoreTypes.Int32);
+                cg.EmitGeneratorInstance();
+                cg.Builder.EmitIntConstant(-2);
                 cg.EmitCall(ILOpCode.Call, cg.CoreMethods.Operators.SetGeneratorState_Generator_int);
 
                 cg.Builder.EmitRet(true);
@@ -196,7 +196,7 @@ namespace Pchp.CodeAnalysis.Semantics
 
             // Template: <local> = $GLOBALS.EnsureItemAlias("name")
 
-            var local = this.Variable.BindPlace(cg.Builder, BoundAccess.Write.WithWriteRef(TypeRefMask.AnyType), 0);
+            var local = this.Variable.BindPlace(cg);
             local.EmitStorePrepare(cg);
 
             // <ctx>.Globals : PhpArray
@@ -204,7 +204,7 @@ namespace Pchp.CodeAnalysis.Semantics
             cg.EmitCall(ILOpCode.Call, cg.CoreMethods.Context.Globals.Getter);
 
             // PhpArray.EnsureItemAlias( name ) : PhpAlias
-            cg.EmitIntStringKey(this.Variable.Name);
+            this.Variable.Name.EmitIntStringKey(cg);
             var t = cg.EmitCall(ILOpCode.Call, cg.CoreMethods.PhpArray.EnsureItemAlias_IntStringKey)
                 .Expect(cg.CoreTypes.PhpAlias);
 
@@ -303,13 +303,41 @@ namespace Pchp.CodeAnalysis.Semantics
         }
     }
 
+    partial class BoundGlobalConstDeclStatement
+    {
+        internal override void Emit(CodeGenerator cg)
+        {
+            // Template: internal static int <const>Name;
+            var idxfield = cg.Module.SynthesizedManager.GetGlobalConstantIndexField(Name.ToString());
+
+            // Template: Operators.DeclareConstant(ctx, Name, ref idx, Value)
+            cg.EmitLoadContext();
+            cg.Builder.EmitStringConstant(Name.ToString());
+            cg.EmitFieldAddress(idxfield);
+            cg.EmitConvert(Value, cg.CoreTypes.PhpValue);
+            cg.EmitCall(ILOpCode.Call, cg.CoreMethods.Operators.DeclareConstant_Context_string_int_PhpValue)
+                .Expect(SpecialType.System_Void);
+        }
+    }
+
     partial class BoundUnset
     {
         internal override void Emit(CodeGenerator cg)
         {
             cg.EmitSequencePoint(this.PhpSyntax);
+            EmitUnset(cg, Variable);
+        }
 
-            this.VarReferences.ForEach(cg.EmitUnset);
+        static void EmitUnset(CodeGenerator cg, BoundReferenceExpression expr)
+        {
+            if (!expr.Access.IsUnset)
+                throw new ArgumentException();
+
+            var place = expr.BindPlace(cg);
+            Debug.Assert(place != null);
+
+            place.EmitStorePrepare(cg);
+            place.EmitStore(cg, null);
         }
     }
 
@@ -325,7 +353,6 @@ namespace Pchp.CodeAnalysis.Semantics
 
             var il = cg.Builder;
 
-
             // sets currValue and currKey on generator object
             setAsPhpValueOnGenerator(cg, YieldedValue, cg.CoreMethods.Operators.SetGeneratorCurrValue_Generator_PhpValue);
             setAsPhpValueOnGenerator(cg, YieldedKey, cg.CoreMethods.Operators.SetGeneratorCurrKey_Generator_PhpValue);
@@ -333,14 +360,14 @@ namespace Pchp.CodeAnalysis.Semantics
 
             // generator._userKeyReturned = (YieldedKey != null)
             var userKeyReturned = (YieldedKey != null);
-            il.EmitLoadArgumentOpcode(3);
-            cg.EmitLoadConstant(userKeyReturned, cg.CoreTypes.Boolean);
+            cg.EmitGeneratorInstance();
+            cg.Builder.EmitBoolConstant(userKeyReturned);
             cg.EmitCall(ILOpCode.Call, cg.CoreMethods.Operators.SetGeneratorReturnedUserKey_Generator_bool);
 
 
             //generator._state = yieldIndex
-            il.EmitLoadArgumentOpcode(3);
-            cg.EmitLoadConstant(yieldIndex, cg.CoreTypes.Int32);
+            cg.EmitGeneratorInstance();
+            il.EmitIntConstant(yieldIndex);
             cg.EmitCall(ILOpCode.Call, cg.CoreMethods.Operators.SetGeneratorState_Generator_int);
 
 
@@ -349,18 +376,18 @@ namespace Pchp.CodeAnalysis.Semantics
             il.MarkLabel(this);
 
             // if(generator._currException != null) throw ex;
-            il.EmitLoadArgumentOpcode(3);
+            cg.EmitGeneratorInstance();
             cg.EmitCall(ILOpCode.Call, cg.CoreMethods.Operators.GetGeneratorThrownException_Generator);
 
             var excNotNull = new NamedLabel("generator._currException == null");
             il.EmitBranch(ILOpCode.Brfalse, excNotNull);
 
             // load the exception to be thrown on stack (so it can be nulled)
-            il.EmitLoadArgumentOpcode(3);
+            cg.EmitGeneratorInstance();
             cg.EmitCall(ILOpCode.Call, cg.CoreMethods.Operators.GetGeneratorThrownException_Generator);
 
             //g._curException = null : clear the field after throwing the exception
-            il.EmitLoadArgumentOpcode(3);
+            cg.EmitGeneratorInstance();
             cg.EmitCall(ILOpCode.Call, cg.CoreMethods.Operators.NullGeneratorThrownException_Generator);
 
             il.EmitThrow(false);
@@ -371,14 +398,15 @@ namespace Pchp.CodeAnalysis.Semantics
 
         private void setAsPhpValueOnGenerator(CodeGenerator cg, BoundExpression valueExpr, CoreMethod setMethod)
         {
-            var il = cg.Builder;
-            il.EmitLoadArgumentOpcode(3);
+            cg.EmitGeneratorInstance();
 
-            if (valueExpr == null) { cg.Emit_PhpValue_Null(); }
+            if (valueExpr == null)
+            {
+                cg.Emit_PhpValue_Null();
+            }
             else
             {
-                cg.Emit(valueExpr);
-                cg.EmitConvertToPhpValue(valueExpr.ResultType, valueExpr.TypeRefMask);
+                cg.EmitConvertToPhpValue(cg.Emit(valueExpr), valueExpr.TypeRefMask);
             }
 
             cg.EmitCall(ILOpCode.Call, setMethod);

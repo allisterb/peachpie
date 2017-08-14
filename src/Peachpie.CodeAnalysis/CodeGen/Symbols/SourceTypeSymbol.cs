@@ -12,33 +12,6 @@ using System.Collections.Immutable;
 
 namespace Pchp.CodeAnalysis.Symbols
 {
-    partial class NamedTypeSymbol
-    {
-        /// <summary>
-        /// Gets special <c>_statics</c> nested class holding static fields bound to context.
-        /// </summary>
-        /// <returns></returns>
-        internal TypeSymbol TryGetStatics() => (TypeSymbol)(this as IPhpTypeSymbol)?.StaticsContainer;
-
-        /// <summary>
-        /// Emits load of statics holder.
-        /// </summary>
-        internal TypeSymbol EmitLoadStatics(CodeGenerator cg)
-        {
-            var statics = TryGetStatics();
-
-            if (statics != null && statics.GetMembers().OfType<IFieldSymbol>().Any())
-            {
-                // Template: <ctx>.GetStatics<_statics>()
-                cg.EmitLoadContext();
-                return cg.EmitCall(ILOpCode.Callvirt, cg.CoreMethods.Context.GetStatic_T.Symbol.Construct(statics))
-                    .Expect(statics);
-            }
-
-            return null;
-        }
-    }
-
     partial class SourceTypeSymbol
     {
         internal void EmitInit(Emit.PEModuleBuilder module, DiagnosticBag diagnostics)
@@ -54,7 +27,7 @@ namespace Pchp.CodeAnalysis.Symbols
 
             // .ctor
             EmitPhpCtors(this.InstanceConstructors, module, diagnostics);
-            
+
             // System.ToString
             EmitToString(module);
         }
@@ -200,7 +173,7 @@ namespace Pchp.CodeAnalysis.Symbols
                     Debug.Assert(ctor.BaseCtor != null);
 
                     // base..ctor or this..ctor
-                    cg.EmitPop(cg.EmitThisCall(ctor.BaseCtor, ctor));
+                    cg.EmitPop(cg.EmitForwardCall(ctor.BaseCtor, ctor));
 
                     if (ctor.PhpConstructor == null)
                     {
@@ -230,7 +203,7 @@ namespace Pchp.CodeAnalysis.Symbols
                         Debug.Assert(ctor.BaseCtor.ContainingType == this);
 
                         // this.__construct
-                        cg.EmitPop(cg.EmitThisCall(ctor.PhpConstructor, ctor));
+                        cg.EmitPop(cg.EmitForwardCall(ctor.PhpConstructor, ctor));
                     }
 
                     // ret
@@ -266,7 +239,7 @@ namespace Pchp.CodeAnalysis.Symbols
                     if (__tostring != null)
                     {
                         // __tostring().ToString()
-                        cg.EmitConvert(cg.EmitThisCall(__tostring, tostring), 0, tostring.ReturnType);
+                        cg.EmitConvert(cg.EmitForwardCall(__tostring, tostring), 0, tostring.ReturnType);
                     }
                     else
                     {
@@ -278,6 +251,62 @@ namespace Pchp.CodeAnalysis.Symbols
 
                 }, null, DiagnosticBag.GetInstance(), false));
                 module.SynthesizedManager.AddMethod(this, tostring);
+            }
+        }
+
+        /// <summary>
+        /// Collects methods that has to be overriden and matches with this declaration.
+        /// Missing overrides are reported, needed ghost stubs are synthesized.
+        /// </summary>
+        public void FinalizeMethodTable(Emit.PEModuleBuilder module, DiagnosticBag diagnostics)
+        {
+            // creates ghost stubs for overrides that do not match the signature
+
+            foreach (var info in this.ResolveOverrides(diagnostics))
+            {
+                // note: unresolved abstracts already reported by ResolveOverrides
+
+                // is ghost stub needed?
+
+                if (ReferenceEquals(info.OverrideCandidate?.ContainingType, this) ||    // candidate not matching exactly the signature in this type
+                    info.ImplementsInterface)                                           // explicitly implement the interface
+                {
+                    if (info.HasOverride)
+                    {
+                        if (info.ImplementsInterface && info.Override != null)
+                        {
+                            // create explicit override only if the interface method is implemented with a class method that does not implement the interface
+                            /*
+                             * interface I { foo }  // METHOD
+                             * class X { foo }      // OVERRIDE
+                             * class Y : X, I { explicit I.foo override }   // GHOST
+                             */
+                            if (info.Override.ContainingType.ImplementsInterface(info.Method.ContainingType))
+                            {
+                                /* => X implements I */
+                                // explicit method override is not needed
+                                continue;
+                            }
+                        }
+
+                        /* 
+                         * class A {
+                         *    TReturn1 foo(A, B);
+                         * }
+                         * class B : A {
+                         *    TReturn2 foo(A2, B2);
+                         *    
+                         *    // SYNTHESIZED GHOST:
+                         *    override TReturn foo(A, B){ return (TReturn)foo((A2)A, (B2)B);
+                         * }
+                         */
+
+                        // override method with a ghost that calls the override
+                        (info.Override ?? info.OverrideCandidate).CreateGhostOverload(
+                            this, module, diagnostics,
+                            info.Method.ReturnType, info.Method.Parameters, info.Method);
+                    }
+                }
             }
         }
     }

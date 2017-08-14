@@ -322,7 +322,8 @@ namespace Pchp.Core
                 return iskey;
             }
 
-            throw new ArgumentException();
+            PhpException.Throw(PhpError.Warning, Resources.ErrResources.illegal_offset_type);
+            return IntStringKey.EmptyStringKey;
         }
 
         /// <summary>
@@ -360,8 +361,7 @@ namespace Pchp.Core
         /// <summary>
         /// Gets callable wrapper for the object dynamic invocation.
         /// </summary>
-        /// <returns></returns>
-        public IPhpCallable AsCallable() => _type.AsCallable(ref this);
+        public IPhpCallable AsCallable(RuntimeTypeHandle callerCtx = default(RuntimeTypeHandle)) => _type.AsCallable(ref this, callerCtx);
 
         public object EnsureObject() => _type.EnsureObject(ref this);
 
@@ -373,6 +373,12 @@ namespace Pchp.Core
         public IPhpArray EnsureArray() => _type.EnsureArray(ref this);
 
         public PhpAlias EnsureAlias() => _type.EnsureAlias(ref this);
+
+        /// <summary>
+        /// Gets <see cref="IPhpArray"/> instance providing access to the value with array operators.
+        /// Returns <c>null</c> if underlaying value does provide array access.
+        /// </summary>
+        public IPhpArray GetArrayAccess() => _type.GetArrayAccess(ref this);
 
         /// <summary>
         /// Dereferences in case of an alias.
@@ -467,6 +473,12 @@ namespace Pchp.Core
             Debug.WriteLine("Use ToString(Context) instead!");
             return _type.ToStringQuiet(ref this);
         }
+
+        /// <summary>
+        /// Implements <c>foreach</c> over <see cref="PhpValue"/>.
+        /// Gets the enumerator object allowing to iterate through PHP values, arrays and iterators.
+        /// </summary>
+        public IEnumerator<KeyValuePair<PhpValue, PhpValue>> GetEnumerator() => this.GetForeachEnumerator(false, default(RuntimeTypeHandle));
 
         #endregion
 

@@ -182,9 +182,9 @@ namespace Pchp.CodeAnalysis.FlowAnalysis
         /// <summary>
         /// Gets variable handle use for other variable operations.
         /// </summary>
-        public VariableHandle/*!*/GetLocalHandle(string varname)
+        public VariableHandle/*!*/GetLocalHandle(VariableName varname)
         {
-            return _flowCtx.GetVarIndex(new VariableName(varname));
+            return _flowCtx.GetVarIndex(varname);
         }
 
         /// <summary>
@@ -215,7 +215,14 @@ namespace Pchp.CodeAnalysis.FlowAnalysis
         public TypeRefMask GetLocalType(VariableHandle handle)
         {
             handle.ThrowIfInvalid();
-            return (handle < _varsType.Length) ? _varsType[handle] : 0;
+            return (handle < _varsType.Length) ? _varsType[handle] : GetUnknownLocalType(handle);
+        }
+
+        TypeRefMask GetUnknownLocalType(VariableHandle handle)
+        {
+            return IsLocalSet(handle)
+                ? TypeRefMask.AnyType.WithRefFlag   // <= SetAllUnknown() called
+                : 0;                                // variable was not initialized in the state yet
         }
 
         /// <summary>
@@ -264,7 +271,7 @@ namespace Pchp.CodeAnalysis.FlowAnalysis
         public bool IsLocalSet(VariableHandle handle)
         {
             handle.ThrowIfInvalid();
-            return handle.Slot >= FlowContext.BitsCount || (_initializedMask & (1u << handle)) != 0;
+            return handle.Slot >= FlowContext.BitsCount || (_initializedMask & (1ul << handle)) != 0;
         }
 
         public void FlowThroughReturn(TypeRefMask type)
@@ -282,7 +289,7 @@ namespace Pchp.CodeAnalysis.FlowAnalysis
             int varindex = handle.Slot;
             if (varindex >= 0 && varindex < FlowContext.BitsCount)
             {
-                _initializedMask |= 1u << varindex;
+                _initializedMask |= 1ul << varindex;
             }
         }
 
@@ -291,7 +298,7 @@ namespace Pchp.CodeAnalysis.FlowAnalysis
             var varindex = handle.Slot;
             if (varindex >= 0 && varindex < FlowContext.BitsCount)
             {
-                _initializedMask &= ~(1u << varindex);
+                _initializedMask &= ~(1ul << varindex);
             }
         }
 

@@ -124,6 +124,19 @@ namespace Pchp.Core
 
             tscriptinfo.GetDeclaredMethod("EnumerateConstants")
                 .Invoke(null, new object[] { new Action<string, PhpValue, bool>(ConstsMap.DefineAppConstant) });
+
+            //
+            ScriptAdded(tscriptinfo);
+        }
+
+        static void ScriptAdded(TypeInfo tscript)
+        {
+            Debug.Assert(tscript != null);
+
+            if (_targetPhpLanguageAttribute == null)
+            {
+                _targetPhpLanguageAttribute = tscript.Assembly.GetCustomAttribute<TargetPhpLanguageAttribute>();
+            }
         }
 
         /// <summary>
@@ -190,13 +203,13 @@ namespace Pchp.Core
         }
 
         /// <summary>
-        /// Gets runtime type information, or <c>null</c> if type with given is not declared.
+        /// Gets runtime type information, or <c>null</c> if type with given is name not declared.
         /// </summary>
         public PhpTypeInfo GetDeclaredType(string name, bool autoload = false)
             => _types.GetDeclaredType(name) ?? (autoload ? this.AutoloadService.AutoloadTypeByName(name) : null);
 
         /// <summary>
-        /// Gets runtime type information, or <c>null</c> if type with given is not declared.
+        /// Gets runtime type information, or throws if type with given name is not declared.
         /// </summary>
         public PhpTypeInfo GetDeclaredTypeOrThrow(string name, bool autoload = false)
         {
@@ -207,6 +220,44 @@ namespace Pchp.Core
             }
 
             return tinfo;
+        }
+
+        /// <summary>
+        /// Gets runtime type information of given type by its name.
+        /// Resolves reserved type names according to current caller context.
+        /// Returns <c>null</c> if type was not resolved.
+        /// </summary>
+        public PhpTypeInfo ResolveType(string name, RuntimeTypeHandle callerCtx, bool autoload = false)
+        {
+            Debug.Assert(name != null);
+
+            // reserved type names: parent, self, static
+            if (name.Length == 6)
+            {
+                if (name.EqualsOrdinalIgnoreCase("parent"))
+                {
+                    if (!callerCtx.Equals(default(RuntimeTypeHandle)))
+                    {
+                        return Type.GetTypeFromHandle(callerCtx).GetPhpTypeInfo().BaseType;
+                    }
+                    return null;
+                }
+                else if (name.EqualsOrdinalIgnoreCase("static"))
+                {
+                    throw new NotImplementedException();
+                }
+            }
+            else if (name.Length == 4 && name.EqualsOrdinalIgnoreCase("self"))
+            {
+                if (!callerCtx.Equals(default(RuntimeTypeHandle)))
+                {
+                    return Type.GetTypeFromHandle(callerCtx).GetPhpTypeInfo();
+                }
+                return null;
+            }
+
+            //
+            return GetDeclaredType(name, autoload);
         }
 
         /// <summary>
@@ -254,7 +305,9 @@ namespace Pchp.Core
         /// <param name="throwOnError">Whether to include according to require semantics.</param>
         /// <returns>Inclusion result value.</returns>
         public PhpValue Include(string dir, string path, bool once = false, bool throwOnError = false)
-            => Include(dir, path, Globals, null, once, throwOnError);
+            => Include(dir, path, Globals,
+                once: once,
+                throwOnError: throwOnError);
 
         /// <summary>
         /// Resolves path according to PHP semantics, lookups the file in runtime tables and calls its Main method.
@@ -263,10 +316,11 @@ namespace Pchp.Core
         /// <param name="path">The relative or absolute path to resolve and include.</param>
         /// <param name="locals">Variables scope for the included script.</param>
         /// <param name="this">Reference to <c>this</c> variable.</param>
+        /// <param name="self">Reference to current class context.</param>
         /// <param name="once">Whether to include according to include once semantics.</param>
         /// <param name="throwOnError">Whether to include according to require semantics.</param>
         /// <returns>Inclusion result value.</returns>
-        public PhpValue Include(string cd, string path, PhpArray locals, object @this = null, bool once = false, bool throwOnError = false)
+        public PhpValue Include(string cd, string path, PhpArray locals, object @this = null, RuntimeTypeHandle self = default(RuntimeTypeHandle), bool once = false, bool throwOnError = false)
         {
             var script = ScriptsMap.ResolveInclude(path, RootPath, IncludePaths, WorkingDirectory, cd);
             if (script.IsValid)
@@ -277,7 +331,7 @@ namespace Pchp.Core
                 }
                 else
                 {
-                    return script.Evaluate(this, locals, @this);
+                    return script.Evaluate(this, locals, @this, self);
                 }
             }
             else
@@ -327,36 +381,19 @@ namespace Pchp.Core
         #region Constants
 
         /// <summary>
-        /// Gets a constant value.
-        /// </summary>
-        public PhpValue GetConstant(string name)
-        {
-            int idx = 0;
-            return GetConstant(name, ref idx);
-        }
-
-        /// <summary>
-        /// Gets a constant value.
-        /// </summary>
-        public PhpValue GetConstant(string name, ref int idx)
-        {
-            PhpValue value;
-            if (TryGetConstant(name, out value) == false)
-            {
-                // Warning: undefined constant
-                PhpException.Throw(PhpError.Warning, Resources.ErrResources.undefined_constant, name);
-                value = (PhpValue)name;
-            }
-
-            return value;
-        }
-
-        /// <summary>
         /// Tries to get a global constant from current context.
         /// </summary>
         public bool TryGetConstant(string name, out PhpValue value)
         {
             int idx = 0;
+            return TryGetConstant(name, out value, ref idx);
+        }
+
+        /// <summary>
+        /// Tries to get a global constant from current context.
+        /// </summary>
+        internal bool TryGetConstant(string name, out PhpValue value, ref int idx)
+        {
             value = _constants.GetConstant(name, ref idx);
             return value.IsSet;
         }
@@ -365,6 +402,11 @@ namespace Pchp.Core
         /// Defines a runtime constant.
         /// </summary>
         public bool DefineConstant(string name, PhpValue value, bool ignorecase = false) => _constants.DefineConstant(name, value, ignorecase);
+
+        /// <summary>
+        /// Defines a runtime constant.
+        /// </summary>
+        internal bool DefineConstant(string name, PhpValue value, ref int idx, bool ignorecase = false) => _constants.DefineConstant(name, value, ref idx, ignorecase);
 
         /// <summary>
         /// Determines whether a constant with given name is defined.
@@ -420,17 +462,32 @@ namespace Pchp.Core
             }
         }
 
+        /// <summary>
+        /// Closes current web session if opened.
+        /// </summary>
+        void ShutdownSessionHandler()
+        {
+            var webctx = HttpPhpContext;
+            if (webctx != null && webctx.SessionState == PhpSessionState.Started)
+            {
+                webctx.SessionHandler.CloseSession(this, webctx, false);
+            }
+        }
+
         #endregion
 
         #region IDisposable
 
+        bool _disposed;
+
         public virtual void Dispose()
         {
-            //if (!disposed)
+            if (!_disposed)
             {
                 try
                 {
                     ProcessShutdownCallbacks();
+                    ShutdownSessionHandler();
                     //this.GuardedCall<object, object>(this.FinalizePhpObjects, null, false);
                     FinalizeBufferedOutput();
 
@@ -444,8 +501,8 @@ namespace Pchp.Core
                     //if (this.FinallyDispose != null)
                     //    this.FinallyDispose();
 
-                    ////
-                    //this.disposed = true;
+                    //
+                    _disposed = true;
                 }
             }
         }
